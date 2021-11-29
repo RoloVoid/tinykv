@@ -210,6 +210,36 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	r.electionElapsed++
+	if r.electionElapsed >= r.electionTimeout {
+		r.electionElapsed = 0
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVote,
+			From:    r.id,
+		}
+		err := r.Step(msg)
+		if err != nil {
+			panic(err)
+		}
+		if r.State == StateLeader && r.leadTransferee != None {
+			r.leadTransferee = None
+		}
+	}
+
+	//when this node is leader
+	if r.State == StateLeader {
+		r.heartbeatElapsed++
+		if r.heartbeatElapsed >= r.heartbeatTimeout {
+			r.heartbeatElapsed = 0
+			msg := pb.Message{
+				MsgType: pb.MessageType_MsgBeat,
+				From:    r.id,
+			}
+			if err := r.Step(msg); err != nil {
+				panic(err)
+			}
+		}
+	}
 }
 
 // becomeFollower transform this peer's state to Follower
