@@ -52,25 +52,29 @@ type RaftLog struct {
 	// Your Data Here (2A).
 }
 
+func errHandler(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
 	firstindex, err := storage.FirstIndex()
-	if err != nil {
-		panic(err) //no need to intend to repair
-	}
+	errHandler(err) //no need to intend to repair
 	snapshot, err := storage.Snapshot()
-	if err != nil {
-		panic(err)
-	}
-
+	errHandler(err)
+	// entries, err := storage.Entries()
+	errHandler(err)
 	//initialize, all the pointers are at the startline
 	NewRaftLog := &RaftLog{
-		storage:         storage,
-		committed:       firstindex - 1,
-		applied:         firstindex - 1,
-		stabled:         firstindex - 1,
+		storage:   storage,
+		committed: firstindex - 1,
+		applied:   firstindex - 1,
+		stabled:   firstindex - 1,
+		// entries:         entries,
 		pendingSnapshot: &snapshot,
 	}
 	return NewRaftLog
@@ -86,23 +90,34 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	lastindex, err := l.storage.LastIndex()
+	errHandler(err)
+	hi := lastindex + 1
+	lo := l.stabled + 1
+	data, err := l.storage.Entries(lo, hi)
+	errHandler(err)
+	return data
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return nil
+	data, err := l.storage.Entries(l.applied+1, l.committed)
+	errHandler(err)
+	return data
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	li, err := l.storage.LastIndex()
+	errHandler(err)
+	return li
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	term, err := l.storage.Term(i)
+	return term, err
 }
