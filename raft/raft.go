@@ -165,22 +165,48 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
+	raftlog := newLog(c.Storage)
+	votes := make(map[uint64]bool)
+	prs := make(map[uint64]*Progress)
+	raft := &Raft{
+		id:               c.ID,
+		Lead:             None,
+		RaftLog:          raftlog,
+		heartbeatTimeout: c.HeartbeatTick,
+		electionTimeout:  c.ElectionTick,
+		votes:            votes,
+		Prs:              prs,
+	}
 
-	return nil
+	return raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	return false
+	appendmsg := pb.Message{
+		MsgType: pb.MessageType_MsgAppend,
+		From:    r.id,
+		To:      to,
+		Index:   r.RaftLog.committed,
+	}
+	r.msgs = append(r.msgs, appendmsg)
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
+	hbmsg := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeat,
+		From:    r.id,
+		To:      to,
+	}
+	r.msgs = append(r.msgs, hbmsg)
 }
 
+//wait for implementation
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
