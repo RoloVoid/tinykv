@@ -70,12 +70,20 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
+	prevSfState *SoftState
+	prevHdState pb.HardState
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
-	return nil, nil
+	raft := newRaft(config)
+	rn := &RawNode{
+		Raft:        raft,
+		prevSfState: raft.softState(),
+		prevHdState: *raft.hardState(),
+	}
+	return rn, nil
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -143,12 +151,39 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
-	return Ready{}
+	temp := Ready{
+		Entries:          rn.Raft.RaftLog.entries,
+		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
+		Messages:         rn.Raft.msgs,
+	}
+	if softst := rn.Raft.softState(); !softst.equal(rn.prevSfState) {
+		temp.SoftState = softst
+	}
+	if hardSt := rn.Raft.hardState(); !isHardStateEqual(*hardSt, rn.prevHdState) {
+		temp.HardState = *hardSt
+	}
+	if rn.Raft.RaftLog.pendingSnapshot != nil {
+		temp.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+	}
+	return temp
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
+	r := rn.Raft
+	if !r.softState().equal(rn.prevSfState) {
+		return true
+	}
+	if hardSt := r.hardState(); !IsEmptyHardState(*hardSt) && !isHardStateEqual(*hardSt, rn.prevHdState) {
+		return true
+	}
+	if r.RaftLog.hasPendingSnapshot() {
+		return true
+	}
+	if len(r.msgs) > 0 || len(r.RaftLog.unstableEntries()) > 0 || r.RaftLog.nextEnts() == nil {
+		return true
+	}
 	return false
 }
 
@@ -156,6 +191,9 @@ func (rn *RawNode) HasReady() bool {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+	if !IsEmptyHardState(rd.HardState) {
+		rn.prevHdState = rd.HardState
+	}
 }
 
 // GetProgress return the Progress of this node and its peers, if this

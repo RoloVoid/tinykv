@@ -102,6 +102,9 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
+	if l.applied >= l.committed {
+		return nil
+	}
 	data, err := l.storage.Entries(l.applied+1, l.committed)
 	errHandler(err)
 	return data
@@ -120,4 +123,9 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
 	term, err := l.storage.Term(i)
 	return term, err
+}
+
+// A method used to check out whether there is unstable snapshot
+func (l *RaftLog) hasPendingSnapshot() bool {
+	return l.pendingSnapshot != nil && !IsEmptySnap(l.pendingSnapshot)
 }
