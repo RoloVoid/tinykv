@@ -168,6 +168,9 @@ func newRaft(c *Config) *Raft {
 	raftlog := newLog(c.Storage)
 	votes := make(map[uint64]bool)
 	prs := make(map[uint64]*Progress)
+	for _, id := range c.peers {
+		prs[id] = new(Progress)
+	}
 	raft := &Raft{
 		id:               c.ID,
 		Lead:             None,
@@ -218,6 +221,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
 		To:      to,
+		Term:    r.Term,
 	}
 	r.msgs = append(r.msgs, hbmsg)
 }
@@ -327,6 +331,18 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgAppend:
 		//put this msg in its log and response
 		r.handleAppendEntries(m)
+	case pb.MessageType_MsgHeartbeat:
+		//whether reject or no response depends on design/doubt
+		if m.Term < r.Term {
+			return nil
+		}
+		hbr := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      r.Lead,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, hbr)
 	default:
 		return nil
 	}
@@ -339,11 +355,13 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 	case pb.MessageType_MsgHup:
 		if r.campaign() {
 			r.becomeCandidate()
+			for _, id := range r.Prs {
+				mrv := pb.M
+			}
 			return nil
 		} else {
-			// figure out a better design
-			err := new(error)
-			return *err
+			// figure out a better design /doubt
+			return nil
 		}
 		//campaign and send msg_requestvote
 	case pb.MessageType_MsgAppend:
@@ -354,6 +372,16 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		//check and respond and update votes
 	case pb.MessageType_MsgHeartbeat:
 		r.becomeFollower(m.Term, m.From)
+		if m.Term < r.Term {
+			return nil
+		}
+		hbr := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      r.Lead,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, hbr)
 	default:
 		return nil
 	}
@@ -364,10 +392,15 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 func (r *Raft) stepLeader(m pb.Message) error {
 	switch m.MsgType {
 	case pb.MessageType_MsgBeat:
-		// r.State = StateCandidate
 		// send heartbeat to all the followers
+		for id := range r.Prs {
+			if id != r.id {
+				r.sendHeartbeat(id) //do not send heartbeat to itself
+			}
+		}
 	case pb.MessageType_MsgPropose:
 		// send msgAppend to all the followers
+		r.handleAppendEntries(m)
 	case pb.MessageType_MsgAppendResponse:
 		//counter and check committed
 	case pb.MessageType_MsgSnapshot:
@@ -396,14 +429,13 @@ func (r *Raft) campaign() bool {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-	if m.MsgType != pb.MessageType_MsgAppend {
+	if !(m.MsgType == pb.MessageType_MsgAppend || m.MsgType == pb.MessageType_MsgPropose) {
 		return
 	}
-	check := true
 	if m.Term >= r.Term {
 		r.Term = m.Term
 	} else {
-		check = false
+		return
 	}
 	// add entry to its own log
 	for _, item := range m.Entries {
@@ -414,7 +446,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      r.Lead,
-		Reject:  check,
+		Reject:  false,
 	}
 	r.msgs = append(r.msgs, rm)
 }
