@@ -194,6 +194,7 @@ func (rn *RawNode) Advance(rd Ready) {
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHdState = rd.HardState
 	}
+	// rn.Raft.advance()
 }
 
 // GetProgress return the Progress of this node and its peers, if this

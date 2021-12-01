@@ -94,6 +94,9 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	errHandler(err)
 	hi := lastindex + 1
 	lo := l.stabled + 1
+	if hi == lo {
+		return nil
+	}
 	data, err := l.storage.Entries(lo, hi)
 	errHandler(err)
 	return data

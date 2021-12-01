@@ -222,7 +222,6 @@ func (r *Raft) sendHeartbeat(to uint64) {
 	r.msgs = append(r.msgs, hbmsg)
 }
 
-//think carefully
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
@@ -258,23 +257,50 @@ func (r *Raft) tick() {
 	}
 }
 
+// check commit size, inspired by etcd
+func (r *Raft) reduceUncommitedSize(ents []pb.Entry) {
+	if r.RaftLog.unstableEntries() == nil || len(r.RaftLog.unstableEntries()) <= 0 {
+		return
+	}
+}
+
+// handle ready and update, inspired by etcd
+func (r *Raft) advance(rd Ready) {}
+
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	// term and related parameters updated
 	r.State = StateFollower
 	r.Lead = lead
+	r.Term = term
+	// reset elapse
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	// related parameters update
 	r.State = StateCandidate
+	r.Lead = None
+	r.Term++
+	// reset elapse
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	// reset related parameter
+	r.State = StateLeader
+	r.Lead = None // asign leader to none when node is leader
+	// reset elapse
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -283,20 +309,128 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+		return r.stepFollower(m)
 	case StateCandidate:
+		return r.stepCandidate(m)
 	case StateLeader:
+		return r.stepLeader(m)
 	}
 	return nil
+}
+
+//case follower
+func (r *Raft) stepFollower(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHup:
+		r.becomeCandidate()
+		//campaign and send msg_requestvote
+	case pb.MessageType_MsgAppend:
+		//put this msg in its log and response
+		r.handleAppendEntries(m)
+	default:
+		return nil
+	}
+	return nil
+}
+
+//case candidate
+func (r *Raft) stepCandidate(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHup:
+		if r.campaign() {
+			r.becomeCandidate()
+			return nil
+		} else {
+			// figure out a better design
+			err := new(error)
+			return *err
+		}
+		//campaign and send msg_requestvote
+	case pb.MessageType_MsgAppend:
+		r.becomeFollower(m.Term, m.From)
+		r.handleAppendEntries(m)
+		//put this msg in its log and response
+	case pb.MessageType_MsgRequestVote:
+		//check and respond and update votes
+	case pb.MessageType_MsgHeartbeat:
+		r.becomeFollower(m.Term, m.From)
+	default:
+		return nil
+	}
+	return nil
+}
+
+//case leader
+func (r *Raft) stepLeader(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgBeat:
+		// r.State = StateCandidate
+		// send heartbeat to all the followers
+	case pb.MessageType_MsgPropose:
+		// send msgAppend to all the followers
+	case pb.MessageType_MsgAppendResponse:
+		//counter and check committed
+	case pb.MessageType_MsgSnapshot:
+		//snapshot related
+	case pb.MessageType_MsgAppend:
+		r.becomeFollower(m.Term, m.From)
+		r.handleAppendEntries(m)
+	default:
+		return nil
+	}
+	return nil
+}
+
+// campaign method when election starts
+func (r *Raft) campaign() bool {
+	if r.State == StateLeader {
+		return false
+	}
+	r.votes = nil
+	newvotes := make(map[uint64]bool)
+	r.votes = newvotes
+	r.votes[r.id] = true
+	return true
 }
 
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+	if m.MsgType != pb.MessageType_MsgAppend {
+		return
+	}
+	check := true
+	if m.Term >= r.Term {
+		r.Term = m.Term
+	} else {
+		check = false
+	}
+	// add entry to its own log
+	for _, item := range m.Entries {
+		r.RaftLog.entries = append(r.RaftLog.entries, *item)
+	}
+	// if succeed,then response
+	rm := pb.Message{
+		MsgType: pb.MessageType_MsgAppendResponse,
+		From:    r.id,
+		To:      r.Lead,
+		Reject:  check,
+	}
+	r.msgs = append(r.msgs, rm)
 }
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	if m.MsgType != pb.MessageType_MsgHeartbeat {
+		return
+	}
+	hrm := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
+		From:    r.id,
+		To:      r.Lead,
+	}
+	r.msgs = append(r.msgs, hrm)
 }
 
 // handleSnapshot handle Snapshot RPC request
