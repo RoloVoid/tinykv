@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// remember to regenerate vote through logs when doing 2B 2021.12.3
 package raft
 
 import (
@@ -179,6 +180,21 @@ type Raft struct {
 	// value.
 	// (Used in 3A conf change)
 	PendingConfIndex uint64
+	// a counter for check leader
+	Majority *majority
+}
+
+// majority function
+// a struct for leadercheck
+// doubt
+type majority struct {
+	counterT int
+	counterF int
+}
+
+//reset init doubt
+func resetMajority() *majority {
+	return new(majority)
 }
 
 // newRaft return a raft peer with the given config
@@ -202,6 +218,7 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		votes:            votes,
 		Prs:              prs,
+		Majority:         resetMajority(),
 	}
 
 	return raft
@@ -219,6 +236,9 @@ func (r *Raft) pastElectionTimeout() bool {
 // inspired by etcd
 func (r *Raft) reset() {
 	r.resetRandomElectionTimeout()
+	r.Majority = nil
+	r.Majority = resetMajority()
+	r.Majority.counterT++
 	r.votes = nil
 	// vote for oneself
 	r.votes = make(map[uint64]bool)
@@ -361,7 +381,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Lead = lead
 	r.reset()
 	r.Term = term
-	r.Vote = None
+	// r.Vote = None	--->doubt
 	// reset elapse
 	// r.electionElapsed = 0
 	// r.heartbeatElapsed = 0
@@ -373,10 +393,10 @@ func (r *Raft) becomeCandidate() {
 	// related parameters update
 	r.State = StateCandidate
 	r.Lead = None
+	r.Term++
 	//doubt,need to be completed
 	r.reset()
 	// vote for node itself but do not record
-	r.Term++
 	r.Vote = None
 	// reset elapse
 	// r.electionElapsed = 0
@@ -444,7 +464,7 @@ func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		From:    r.id,
 		To:      m.From,
-		Term:    r.Term,
+		Term:    r.Term, //--->doubt
 		Reject:  check,
 	}
 }
@@ -499,6 +519,10 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgRequestVote:
 		// figure out a better design /doubt
 		mrvr := r.responseToVote(m)
+		if !mrvr.Reject {
+			// if not reject, become follower
+			r.becomeFollower(m.Term, None)
+		}
 		r.msgs = append(r.msgs, *mrvr)
 		return nil
 	case pb.MessageType_MsgHeartbeat:
@@ -537,10 +561,13 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.electionElapsed = 0
 		r.handleAppendEntries(m)
 		//put this msg in its log and response
-	case pb.MessageType_MsgRequestVote:
-		//check and respond and update votes
+	case pb.MessageType_MsgRequestVote: //check and respond and update votes
 		//not a good design /doubt-->need to wrap
 		mrvr := r.responseToVote(m)
+		if !mrvr.Reject {
+			// if not reject, become follower
+			r.becomeFollower(m.Term, None)
+		}
 		r.msgs = append(r.msgs, *mrvr)
 	case pb.MessageType_MsgHeartbeat:
 		// require better design /doubt
@@ -552,12 +579,20 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.handleHeartbeat(m)
 	case pb.MessageType_MsgRequestVoteResponse:
 		r.votes[m.From] = !m.Reject
-		if r.checkLeader() {
+		if m.Reject {
+			r.Majority.counterF++
+		} else if m.Reject == false {
+			r.Majority.counterT++
+		}
+		if r.checkLeader() == 1 {
 			r.becomeLeader()
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
 			r.bcastAppend()
 			//--->question
+		} else if r.checkLeader() == 2 {
+			r.becomeFollower(m.Term, m.From)
+			r.electionElapsed = 0
 		}
 	default:
 		// if r.checkLeader() {
@@ -571,26 +606,20 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 //case leader
 func (r *Raft) stepLeader(m pb.Message) error {
 	switch m.MsgType {
-	case pb.MessageType_MsgHup:
-		//campaign and send msg_requestvote
-		if r.campaign() {
-			r.becomeCandidate()
-			// to clumsy /doubt
-			r.bcastRequestVote()
-			return nil
-		}
-		// figure out a better design /doubt
-		return nil
-	case pb.MessageType_MsgBeat:
-		// send heartbeat to all the followers
+	case pb.MessageType_MsgHup: //leader won't recieve this
+	case pb.MessageType_MsgBeat: // send heartbeat to all the followers
 		r.bcastHeartBeat()
-	case pb.MessageType_MsgPropose:
-		// send msgAppend to all the followers
+	case pb.MessageType_MsgPropose: // send msgAppend to all the followers
 		// r.handleAppendEntries(m)
-	case pb.MessageType_MsgAppendResponse:
-		//counter and check committed
-	case pb.MessageType_MsgSnapshot:
-		//snapshot related
+	case pb.MessageType_MsgRequestVote: //doubt--->if leader recieve msr,reject
+
+		mrvr := r.responseToVote(m)
+		if !mrvr.Reject {
+			r.becomeFollower(m.Term, None)
+		}
+		r.msgs = append(r.msgs, *mrvr)
+	case pb.MessageType_MsgAppendResponse: //counter and check committed
+	case pb.MessageType_MsgSnapshot: //snapshot related
 	case pb.MessageType_MsgHeartbeat:
 		// ignore lower term msg
 		if m.Term <= r.Term {
@@ -611,13 +640,9 @@ func (r *Raft) stepLeader(m pb.Message) error {
 
 // campaign method when election starts
 func (r *Raft) campaign() bool {
-	// if r.State == StateLeader {
-	// 	return false
-	// }
-	// doubt --> if count peers < 0, then there is no election
 	if len(r.Prs) < 2 {
+		r.becomeCandidate()
 		r.becomeLeader()
-		r.Term++
 		return false
 	}
 	r.votes = nil
@@ -661,11 +686,6 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 	hbrm := r.responseToHeartbeat(m)
-	// hrm := pb.Message{
-	// 	MsgType: pb.MessageType_MsgHeartbeatResponse,
-	// 	From:    r.id,
-	// 	To:      r.Lead,
-	// }
 	r.msgs = append(r.msgs, *hbrm)
 }
 
@@ -686,12 +706,12 @@ func (r *Raft) removeNode(id uint64) {
 
 // check functions
 // check if candidate becomes leader, very clumsy /doubt
-func (r *Raft) checkLeader() bool {
-	target, counterT := len(r.Prs), 0
-	for _, item := range r.votes {
-		if item {
-			counterT++
-		}
+func (r *Raft) checkLeader() int {
+	target := len(r.Prs)
+	if r.Majority.counterF > target/2 {
+		return 2
+	} else if r.Majority.counterT > target/2 {
+		return 1
 	}
-	return counterT > target/2
+	return 0
 }
