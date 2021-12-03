@@ -1604,10 +1604,6 @@ func (nw *network) send(msgs ...pb.Message) {
 	for len(msgs) > 0 {
 		m := msgs[0]
 		p := nw.peers[m.To]
-		// test repair /doubt; if setting statemachine nil is reasonable
-		if p == nil {
-			break
-		}
 		p.Step(m)
 		msgs = append(msgs[1:], nw.filter(p.readMessages())...)
 	}

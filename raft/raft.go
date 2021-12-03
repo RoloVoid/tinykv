@@ -394,13 +394,8 @@ func (r *Raft) becomeCandidate() {
 	r.State = StateCandidate
 	r.Lead = None
 	r.Term++
-	//doubt,need to be completed
-	r.reset()
-	// vote for node itself but do not record
-	r.Vote = None
-	// reset elapse
-	// r.electionElapsed = 0
-	// r.heartbeatElapsed = 0
+	r.reset()     //doubt,need to be completed
+	r.Vote = None // vote for itself,but do not record--->doubt
 }
 
 // becomeLeader transform this peer's state to leader
@@ -410,6 +405,7 @@ func (r *Raft) becomeLeader() {
 	// reset related parameter
 	r.State = StateLeader
 	r.Lead = None // asign leader to none when node is leader
+	// r.Term++
 	// reset elapse
 	// r.electionElapsed = 0
 	// r.heartbeatElapsed = 0
@@ -455,16 +451,18 @@ func (r *Raft) bcastHeartBeat() {
 //response functions
 func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 	check := false
-	if m.Term < r.Term || (r.Vote != None && r.Vote != m.From) {
+	// maybe not here /doubt
+	if m.Term < r.Term || (r.Vote != None && r.Vote != m.From) || (m.Term == r.Term && r.State != StateFollower) {
 		check = true
 	}
-	// maybe not here /doubt
-	r.Vote = m.From
+	if !check {
+		r.Vote = m.From
+	}
 	return &pb.Message{
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		From:    r.id,
 		To:      m.From,
-		Term:    r.Term, //--->doubt
+		Term:    r.Term,
 		Reject:  check,
 	}
 }
@@ -503,13 +501,11 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgHup:
 		if r.campaign() {
 			r.becomeCandidate()
-			// too clumsy /doubt
-			r.bcastRequestVote()
+			r.bcastRequestVote() // too clumsy /doubt
 		}
 		return nil
-	case pb.MessageType_MsgAppend:
+	case pb.MessageType_MsgAppend: //doubt
 		//put this msg in its log and response
-		//doubt
 		if m.Term <= r.Term {
 			return nil
 		}
@@ -519,14 +515,12 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgRequestVote:
 		// figure out a better design /doubt
 		mrvr := r.responseToVote(m)
-		if !mrvr.Reject {
-			// if not reject, become follower
+		if !mrvr.Reject { // if not reject, become follower
 			r.becomeFollower(m.Term, None)
 		}
 		r.msgs = append(r.msgs, *mrvr)
 		return nil
-	case pb.MessageType_MsgHeartbeat:
-		//doubt
+	case pb.MessageType_MsgHeartbeat: //doubt
 		hbr := r.responseToHeartbeat(m)
 		if hbr != nil {
 			r.electionElapsed = 0
@@ -542,18 +536,14 @@ func (r *Raft) stepFollower(m pb.Message) error {
 //case candidate
 func (r *Raft) stepCandidate(m pb.Message) error {
 	switch m.MsgType {
-	case pb.MessageType_MsgHup:
-		//campaign and send msg_requestvote
-		if r.campaign() {
+	case pb.MessageType_MsgHup: // figure out a better design /doubt
+		if r.campaign() { //campaign and send msg_requestvote
 			r.becomeCandidate()
-			// to clumsy /doubt
-			r.bcastRequestVote()
+			r.bcastRequestVote() // to clumsy;doubt
 			return nil
 		}
-		// figure out a better design /doubt
 		return nil
-	case pb.MessageType_MsgAppend:
-		// doubt
+	case pb.MessageType_MsgAppend: // doubt
 		if m.Term < r.Term {
 			return nil
 		}
@@ -562,11 +552,9 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.handleAppendEntries(m)
 		//put this msg in its log and response
 	case pb.MessageType_MsgRequestVote: //check and respond and update votes
-		//not a good design /doubt-->need to wrap
-		mrvr := r.responseToVote(m)
+		mrvr := r.responseToVote(m) //not a good design /doubt
 		if !mrvr.Reject {
-			// if not reject, become follower
-			r.becomeFollower(m.Term, None)
+			r.becomeFollower(m.Term, None) // if not reject, become follower
 		}
 		r.msgs = append(r.msgs, *mrvr)
 	case pb.MessageType_MsgHeartbeat:
@@ -589,15 +577,12 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
 			r.bcastAppend()
-			//--->question
+			//doubt
 		} else if r.checkLeader() == 2 {
 			r.becomeFollower(m.Term, m.From)
 			r.electionElapsed = 0
 		}
 	default:
-		// if r.checkLeader() {
-		// 	r.becomeLeader()
-		// }
 		return nil
 	}
 	return nil
@@ -621,8 +606,7 @@ func (r *Raft) stepLeader(m pb.Message) error {
 	case pb.MessageType_MsgAppendResponse: //counter and check committed
 	case pb.MessageType_MsgSnapshot: //snapshot related
 	case pb.MessageType_MsgHeartbeat:
-		// ignore lower term msg
-		if m.Term <= r.Term {
+		if m.Term <= r.Term { // ignore lower term msg
 			return nil
 		} else {
 			r.becomeFollower(m.Term, m.From)
@@ -679,7 +663,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 
 // handleHeartbeat handle Heartbeat RPC request
-// rebuild
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
 	if m.MsgType != pb.MessageType_MsgHeartbeat {
