@@ -170,7 +170,7 @@ func (rn *RawNode) Ready() Ready {
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
-	// Your Code Here (2A).
+	// Your Code Here (2A).  ----->2C
 	r := rn.Raft
 	if !r.softState().equal(rn.prevSfState) {
 		return true
@@ -190,7 +190,7 @@ func (rn *RawNode) HasReady() bool {
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
-	// Your Code Here (2A).
+	// Your Code Here (2A). ---->3A
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHdState = rd.HardState
 	}

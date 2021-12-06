@@ -208,7 +208,10 @@ func newRaft(c *Config) *Raft {
 	//init prs
 	prs := make(map[uint64]*Progress)
 	for _, id := range c.peers {
-		prs[id] = new(Progress)
+		prs[id] = &Progress{
+			//Match: 0,
+			//Next:  1,
+		}
 	}
 	raft := &Raft{
 		id:               c.ID,
@@ -218,7 +221,7 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		votes:            votes,
 		Prs:              prs,
-		Majority:         resetMajority(),
+		Majority:         resetMajority(), //for vote
 	}
 
 	return raft
@@ -239,10 +242,8 @@ func (r *Raft) reset() {
 	r.Majority = nil
 	r.Majority = resetMajority()
 	r.Majority.counterT++
-	r.votes = nil
-	// vote for oneself
 	r.votes = make(map[uint64]bool)
-	r.votes[r.id] = true
+	r.votes[r.id] = true // vote for oneself
 }
 
 // get softstate and hardstate
@@ -266,16 +267,25 @@ func (r *Raft) hardState() *pb.HardState {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	// if r.id == to {
-	// 	return false
-	// } // rebuild
-	// doubt whether logs are added like this
+	var (
+		tempEntries []pb.Entry
+		logterm     uint64
+	)
+	lo := r.Prs[to].Next
+	tempEntries = r.RaftLog.entries[lo:]
+	entries := make([]*pb.Entry, 0)
+	for i := 0; i < len(tempEntries); i++ {
+		entries = append(entries, &tempEntries[i])
+		logterm = tempEntries[i].Term
+	}
 	appendmsg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,
 		Index:   r.RaftLog.committed,
+		LogTerm: logterm,
+		Entries: entries,
 	}
 	r.msgs = append(r.msgs, appendmsg)
 	return true
@@ -369,9 +379,6 @@ func (r *Raft) reduceUncommitedSize(ents []pb.Entry) {
 		return
 	}
 }
-
-// handle ready and update, inspired by etcd
-func (r *Raft) advance(rd Ready) {}
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
@@ -557,8 +564,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.becomeFollower(m.Term, None) // if not reject, become follower
 		}
 		r.msgs = append(r.msgs, *mrvr)
-	case pb.MessageType_MsgHeartbeat:
-		// require better design /doubt
+	case pb.MessageType_MsgHeartbeat: // require better design /doubt
 		if m.Term < r.Term {
 			return nil
 		}
@@ -577,8 +583,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
 			r.bcastAppend()
-			//doubt
-		} else if r.checkLeader() == 2 {
+		} else if r.checkLeader() == 2 { //doubt
 			r.becomeFollower(m.Term, m.From)
 			r.electionElapsed = 0
 		}
@@ -595,9 +600,8 @@ func (r *Raft) stepLeader(m pb.Message) error {
 	case pb.MessageType_MsgBeat: // send heartbeat to all the followers
 		r.bcastHeartBeat()
 	case pb.MessageType_MsgPropose: // send msgAppend to all the followers
-		// r.handleAppendEntries(m)
+		r.handlePropose(m)
 	case pb.MessageType_MsgRequestVote: //doubt--->if leader recieve msr,reject
-
 		mrvr := r.responseToVote(m)
 		if !mrvr.Reject {
 			r.becomeFollower(m.Term, None)
@@ -660,6 +664,30 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		Reject:  false,
 	}
 	r.msgs = append(r.msgs, rm)
+}
+
+// handle propose for leader
+func (r *Raft) handlePropose(m pb.Message) {
+	if m.MsgType != pb.MessageType_MsgPropose || m.From != r.id {
+		return
+	}
+	// put entries to logs
+	// doubt: currently there is only one session
+	items := make([]pb.Entry, 0)
+	for i := 0; i < len(m.Entries); i++ {
+		// 1.check if propose is permitted
+		// doubt
+		m.Entries[i].Index = r.RaftLog.LastIndex() + 1
+		m.Entries[i].Term = r.hardState().Term
+		// 2.put the entry into logs
+		r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[i])
+		items = append(items, *m.Entries[i])
+	}
+	// doubt: 2.1.if lastindex == 0, updated storage ---->dirty becaue assert
+	storage, _ := r.RaftLog.storage.(*MemoryStorage)
+	storage.Append(items)
+	// 3.bcastappend
+	r.bcastAppend()
 }
 
 // handleHeartbeat handle Heartbeat RPC request

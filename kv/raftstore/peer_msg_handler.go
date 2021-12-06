@@ -43,6 +43,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
+	if d.peer.RaftGroup.HasReady() {
+		rd := d.peer.RaftGroup.Ready()         // get ready
+		d.peer.peerStorage.SaveReadyState(&rd) // send ready to local kv base,hold returns
+		//send msgs
+	}
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {

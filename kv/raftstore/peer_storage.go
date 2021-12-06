@@ -34,9 +34,9 @@ type PeerStorage struct {
 	// current region information of the peer
 	region *metapb.Region
 	// current raft state of the peer
-	raftState *rspb.RaftLocalState
+	raftState *rspb.RaftLocalState //rolo:last log index & hardstate --> RaftDB
 	// current apply state of the peer
-	applyState *rspb.RaftApplyState
+	applyState *rspb.RaftApplyState //rolo:last apply state & truncate logs --> KvDB
 
 	// current snapshot state
 	snapState snap.SnapState
@@ -61,7 +61,7 @@ func NewPeerStorage(engines *engine_util.Engines, region *metapb.Region, regionS
 	if err != nil {
 		return nil, err
 	}
-	if raftState.LastIndex < applyState.AppliedIndex {
+	if raftState.LastIndex < applyState.AppliedIndex { //rolo:number of applied logs are supposed to smaller than that of local logs
 		panic(fmt.Sprintf("%s unexpected raft log index: lastIndex %d < appliedIndex %d",
 			tag, raftState.LastIndex, applyState.AppliedIndex))
 	}
@@ -86,6 +86,7 @@ func (ps *PeerStorage) InitialState() (eraftpb.HardState, eraftpb.ConfState, err
 	return *raftState.HardState, util.ConfStateFromRegion(ps.region), nil
 }
 
+//good example
 func (ps *PeerStorage) Entries(low, high uint64) ([]eraftpb.Entry, error) {
 	if err := ps.checkRange(low, high); err != nil || low == high {
 		return nil, err
@@ -111,7 +112,7 @@ func (ps *PeerStorage) Entries(low, high uint64) ([]eraftpb.Entry, error) {
 		if err = entry.Unmarshal(val); err != nil {
 			return nil, err
 		}
-		// May meet gap or has been compacted.
+		// May meet gap or has been compacted. ----->rolo:保持连续性
 		if entry.Index != nextIndex {
 			break
 		}
@@ -127,7 +128,7 @@ func (ps *PeerStorage) Entries(low, high uint64) ([]eraftpb.Entry, error) {
 }
 
 func (ps *PeerStorage) Term(idx uint64) (uint64, error) {
-	if idx == ps.truncatedIndex() {
+	if idx == ps.truncatedIndex() { //rolo:truncate log
 		return ps.truncatedTerm(), nil
 	}
 	if err := ps.checkRange(idx, idx+1); err != nil {
@@ -305,9 +306,28 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 }
 
 // Append the given entries to the raft log and update ps.raftState also delete log entries that will
-// never be committed
+// never be committed ---->rolo: check if current last index >= entry indexs
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
-	// Your Code Here (2B).
+	// 2B
+	var (
+		key []byte
+		err error
+	)
+	// update ---> log in kv
+	for _, item := range entries {
+		if item.Index <= ps.raftState.LastIndex {
+			continue
+		}
+		key = meta.RaftLogKey(ps.region.Id, item.Index)
+		err = raftWB.SetMeta(key, &item)
+		if err != nil {
+			return err
+		}
+		// in order to prevent write fail,update the state every time the entry is sent ro WB without err
+		// ---> update state
+		ps.raftState.LastTerm = item.Term
+		ps.raftState.LastIndex = item.Index
+	}
 	return nil
 }
 
@@ -331,7 +351,19 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, error) {
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
-	return nil, nil
+	// 2B
+	var err error
+	raftWB := new(engine_util.WriteBatch)
+	kvWB := new(engine_util.WriteBatch)
+	//rolo:--->apply committed entries
+	err = ps.Append(ready.CommittedEntries, raftWB)
+	if err != nil {
+		return nil, err
+	}
+	//rolo:--->hardstate
+	//test result in 2c
+	asp, err := ps.ApplySnapshot(&ready.Snapshot, raftWB, kvWB)
+	return asp, err
 }
 
 func (ps *PeerStorage) ClearData() {

@@ -14,7 +14,9 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -55,6 +57,7 @@ type RaftLog struct {
 func errHandler(err error) {
 	if err != nil {
 		panic(err)
+		//log.Errorf(err.Error())
 	}
 }
 
@@ -62,20 +65,18 @@ func errHandler(err error) {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	firstindex, err := storage.FirstIndex()
-	errHandler(err) //no need to intend to repair
-	snapshot, err := storage.Snapshot()
+	//doubt ---> assert is dirty
+	storage1, _ := storage.(*MemoryStorage)
+	lastindex, err := storage.LastIndex()
 	errHandler(err)
-	// entries, err := storage.Entries()
+	// initialize, all the pointers are at the startline
 	errHandler(err)
-	//initialize, all the pointers are at the startline
 	NewRaftLog := &RaftLog{
 		storage:   storage,
-		committed: firstindex - 1,
-		applied:   firstindex - 1,
-		stabled:   firstindex - 1,
-		// entries:         entries,
-		pendingSnapshot: &snapshot,
+		committed: lastindex,
+		applied:   lastindex,
+		stabled:   lastindex,
+		entries:   storage1.ents,
 	}
 	return NewRaftLog
 }
