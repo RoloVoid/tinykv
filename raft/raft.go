@@ -282,7 +282,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
 		To:      to,
-		Term:    r.Term,
+		Term:    r.Term, //doubt, whether it is from hardstate
 		Index:   r.RaftLog.committed,
 		LogTerm: logterm,
 		Entries: entries,
@@ -412,10 +412,6 @@ func (r *Raft) becomeLeader() {
 	// reset related parameter
 	r.State = StateLeader
 	r.Lead = None // asign leader to none when node is leader
-	// r.Term++
-	// reset elapse
-	// r.electionElapsed = 0
-	// r.heartbeatElapsed = 0
 }
 
 // bcast functions
@@ -556,8 +552,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		}
 		r.becomeFollower(m.Term, m.From)
 		r.electionElapsed = 0
-		r.handleAppendEntries(m)
-		//put this msg in its log and response
+		r.handleAppendEntries(m) //put this msg in its log and response
 	case pb.MessageType_MsgRequestVote: //check and respond and update votes
 		mrvr := r.responseToVote(m) //not a good design /doubt
 		if !mrvr.Reject {
@@ -607,7 +602,8 @@ func (r *Raft) stepLeader(m pb.Message) error {
 			r.becomeFollower(m.Term, None)
 		}
 		r.msgs = append(r.msgs, *mrvr)
-	case pb.MessageType_MsgAppendResponse: //counter and check committed
+	case pb.MessageType_MsgAppendResponse: //counter and check committed, update progress
+		r.handleAppendEntriesResponse(m)
 	case pb.MessageType_MsgSnapshot: //snapshot related
 	case pb.MessageType_MsgHeartbeat:
 		if m.Term <= r.Term { // ignore lower term msg
@@ -652,7 +648,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	} else {
 		return
 	}
-	// add entry to its own log
+	// doubt:add entry to its own log
 	for _, item := range m.Entries {
 		r.RaftLog.entries = append(r.RaftLog.entries, *item)
 	}
@@ -661,9 +657,21 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      r.Lead,
+		Index:   r.RaftLog.LastIndex() + (uint64)(len(r.RaftLog.entries)),
 		Reject:  false,
 	}
 	r.msgs = append(r.msgs, rm)
+}
+
+// handle append response
+func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
+	if m.MsgType != pb.MessageType_MsgAppendResponse {
+		return
+	}
+	// doubt: update progress based on reject and index
+	if !m.Reject {
+		r.Prs[m.From].Next = m.Index
+	}
 }
 
 // handle propose for leader
