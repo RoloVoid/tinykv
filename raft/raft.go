@@ -283,7 +283,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		From:    r.id,
 		To:      to,
 		Term:    r.Term, //doubt, whether it is from hardstate
-		Index:   r.RaftLog.committed,
+		Index:   r.RaftLog.committed + 1,
 		LogTerm: logterm,
 		Entries: entries,
 	}

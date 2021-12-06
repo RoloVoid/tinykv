@@ -52,6 +52,8 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+	// a counter to check entry
+	committing map[uint64]int
 }
 
 func errHandler(err error) {
