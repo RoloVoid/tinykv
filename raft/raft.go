@@ -125,7 +125,9 @@ var globalRand = &lockedRand{
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
 // progresses of all followers, and sends entries to the follower based on its progress.
 type Progress struct {
+	// leader records the lastest match log and next log to send
 	Match, Next uint64
+	// doubt, whether should i add more related msgs
 }
 
 type Raft struct {
@@ -209,8 +211,7 @@ func newRaft(c *Config) *Raft {
 	prs := make(map[uint64]*Progress)
 	for _, id := range c.peers {
 		prs[id] = &Progress{
-			//Match: 0,
-			//Next:  1,
+			Next: 1,
 		}
 	}
 	raft := &Raft{
@@ -270,20 +271,32 @@ func (r *Raft) sendAppend(to uint64) bool {
 	var (
 		tempEntries []pb.Entry
 		logterm     uint64
+		term        uint64
 	)
-	lo := r.Prs[to].Next
+	//the factual index
+	lo := r.Prs[to].Next - r.RaftLog.FirstIndex()
+
 	tempEntries = r.RaftLog.entries[lo:]
+	// for noop
+	if len(tempEntries) == 0 && lo == 0 {
+		tempEntries = []pb.Entry{{}}
+		term = 0
+	} else {
+		term = r.Term
+	}
 	entries := make([]*pb.Entry, 0)
 	for i := 0; i < len(tempEntries); i++ {
+		tempEntries[i].Index = r.RaftLog.LastIndex()
 		entries = append(entries, &tempEntries[i])
 		logterm = tempEntries[i].Term
 	}
+
 	appendmsg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
 		To:      to,
-		Term:    r.Term, //doubt, whether it is from hardstate
-		Index:   r.RaftLog.committed + 1,
+		Term:    term, //doubt, whether it is from hardstate
+		Index:   r.Prs[to].Match,
 		LogTerm: logterm,
 		Entries: entries,
 	}
@@ -405,6 +418,21 @@ func (r *Raft) becomeCandidate() {
 	r.Vote = None // vote for itself,but do not record--->doubt
 }
 
+// doubt:noop: a special function for add noop entries
+// func (r *Raft) appendNoopEntries() {
+// 	noop := pb.Entry{
+// 		EntryType: pb.EntryType_EntryNormal,
+// 		Term:      r.Term,
+// 		Index:     r.RaftLog.LastIndex() + 1,
+// 	}
+// 	// entries := []pb.Entry{noop}
+// 	// assert, append
+// 	// storage1, _ := r.RaftLog.storage.(*MemoryStorage)
+// 	// storage1.Append(entries)
+// 	// append to raftlog entries
+// 	r.RaftLog.entries = append(r.RaftLog.entries, noop)
+// }
+
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
@@ -412,6 +440,7 @@ func (r *Raft) becomeLeader() {
 	// reset related parameter
 	r.State = StateLeader
 	r.Lead = None // asign leader to none when node is leader
+	// r.appendNoopEntries()
 }
 
 // bcast functions
@@ -648,16 +677,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	} else {
 		return
 	}
-	// doubt:add entry to its own log
+	// doubt:-----> no safety method
 	for _, item := range m.Entries {
 		r.RaftLog.entries = append(r.RaftLog.entries, *item)
 	}
+
 	// if succeed,then response
 	rm := pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      r.Lead,
-		Index:   r.RaftLog.LastIndex() + (uint64)(len(r.RaftLog.entries)),
+		Term:    m.Term,
+		Index:   m.Index + uint64(len(m.Entries)),
 		Reject:  false,
 	}
 	r.msgs = append(r.msgs, rm)
@@ -670,7 +701,18 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	}
 	// doubt: update progress based on reject and index
 	if !m.Reject {
-		r.Prs[m.From].Next = m.Index
+		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
+			r.checkCommittedMapNil(i)
+			r.RaftLog.committing[i].counter++ // committed + 1
+			if r.checkLogCommitted(i) == 1 && m.Entries != nil {
+				r.RaftLog.committed = i
+			}
+		}
+		// for noop
+		if m.Term != 0 {
+			r.Prs[m.From].Match = m.Index
+			r.Prs[m.From].Next = m.Index + 1
+		}
 	}
 }
 
@@ -685,15 +727,19 @@ func (r *Raft) handlePropose(m pb.Message) {
 	for i := 0; i < len(m.Entries); i++ {
 		// 1.check if propose is permitted
 		// doubt
-		m.Entries[i].Index = r.RaftLog.LastIndex() + 1
+		m.Entries[i].Index = r.RaftLog.LastIndex() + uint64(len(r.RaftLog.entries))
 		m.Entries[i].Term = r.hardState().Term
 		// 2.put the entry into logs
 		r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[i])
 		items = append(items, *m.Entries[i])
 	}
-	// doubt: 2.1.if lastindex == 0, updated storage ---->dirty becaue assert
-	storage, _ := r.RaftLog.storage.(*MemoryStorage)
-	storage.Append(items)
+	// doubt: 2.1.if lastindex == 0, updated storage ---->dirty because assert
+	// storage, _ := r.RaftLog.storage.(*MemoryStorage)
+	// storage.Append(items)
+	// doubt: 2,2 if len(r.Prs) == 1, committed without append
+	if len(r.Prs) < 2 {
+		r.RaftLog.committed = r.RaftLog.LastIndex()
+	}
 	// 3.bcastappend
 	r.bcastAppend()
 }
@@ -733,4 +779,14 @@ func (r *Raft) checkLeader() int {
 		return 1
 	}
 	return 0
+}
+
+// check if log is committed
+func (r *Raft) checkLogCommitted(index uint64) int {
+	return r.RaftLog.checkLogCommitted(index, len(r.Prs))
+}
+
+// create one record
+func (r *Raft) checkCommittedMapNil(index uint64) {
+	r.RaftLog.checkCommittedMapNil(index)
 }

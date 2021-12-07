@@ -365,6 +365,7 @@ func TestLeaderStartReplication2AB(t *testing.T) {
 	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, s)
 	r.becomeCandidate()
 	r.becomeLeader()
+
 	commitNoopEntry(r, s)
 	li := r.RaftLog.LastIndex()
 
@@ -374,11 +375,13 @@ func TestLeaderStartReplication2AB(t *testing.T) {
 	if g := r.RaftLog.LastIndex(); g != li+1 {
 		t.Errorf("lastIndex = %d, want %d", g, li+1)
 	}
+
 	if g := r.RaftLog.committed; g != li {
 		t.Errorf("committed = %d, want %d", g, li)
 	}
 	msgs := r.readMessages()
 	sort.Sort(messageSlice(msgs))
+
 	ent := pb.Entry{Index: li + 1, Term: 1, Data: []byte("some data")}
 	wents := []pb.Entry{ent}
 	wmsgs := []pb.Message{
@@ -495,13 +498,18 @@ func TestLeaderCommitPrecedingEntries2AB(t *testing.T) {
 		r.becomeCandidate()
 		r.becomeLeader()
 		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
-
+		// doubt
+		storage1, _ := r.RaftLog.storage.(*MemoryStorage)
+		fmt.Println(r.RaftLog.entries, storage1.ents, r.RaftLog.LastIndex(), r.RaftLog.committed, "from test")
 		for _, m := range r.readMessages() {
 			r.Step(acceptAndReply(m))
 		}
+		// doubt
+		fmt.Println(r.RaftLog.entries, r.RaftLog.LastIndex(), r.RaftLog.committed, "from test2")
 
 		li := uint64(len(tt))
 		wents := append(tt, pb.Entry{Term: 3, Index: li + 1}, pb.Entry{Term: 3, Index: li + 2, Data: []byte("some data")})
+
 		if g := r.RaftLog.nextEnts(); !reflect.DeepEqual(g, wents) {
 			t.Errorf("#%d: ents = %+v, want %+v", i, g, wents)
 		}
@@ -898,8 +906,10 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 
 		r.sendAppend(id)
 	}
+
 	// simulate the response of MessageType_MsgAppend
 	msgs := r.readMessages()
+
 	for _, m := range msgs {
 		// test
 		if m.MsgType != pb.MessageType_MsgAppend || len(m.Entries) != 1 || m.Entries[0].Data != nil {
@@ -908,6 +918,7 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 		r.Step(acceptAndReply(m))
 	}
 	// ignore further messages to refresh followers' commit index
+
 	r.readMessages()
 	s.Append(r.RaftLog.unstableEntries())
 	r.RaftLog.applied = r.RaftLog.committed

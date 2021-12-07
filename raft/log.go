@@ -53,7 +53,13 @@ type RaftLog struct {
 
 	// Your Data Here (2A).
 	// a counter to check entry
-	committing map[uint64]int
+	committing map[uint64]*commitMsg
+}
+
+type commitMsg struct {
+	counter   int
+	committed bool
+	applied   bool
 }
 
 func errHandler(err error) {
@@ -67,18 +73,21 @@ func errHandler(err error) {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	//doubt ---> assert is dirty
-	storage1, _ := storage.(*MemoryStorage)
 	lastindex, err := storage.LastIndex()
 	errHandler(err)
+	// fi, err := storage.FirstIndex()
+	// errHandler(err)
+	// doubt ---> assert is dirty
+	// doubt ---> storage is not
+	entries := make([]pb.Entry, 0)
 	// initialize, all the pointers are at the startline
-	errHandler(err)
 	NewRaftLog := &RaftLog{
-		storage:   storage,
-		committed: lastindex,
-		applied:   lastindex,
-		stabled:   lastindex,
-		entries:   storage1.ents,
+		storage:    storage,
+		committed:  lastindex,
+		applied:    lastindex,
+		stabled:    lastindex,
+		entries:    entries,
+		committing: make(map[uint64]*commitMsg),
 	}
 	return NewRaftLog
 }
@@ -93,15 +102,13 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	lastindex, err := l.storage.LastIndex()
-	errHandler(err)
-	hi := lastindex + 1
-	lo := l.stabled + 1
-	if hi == lo {
-		return nil
+	base, err := l.storage.LastIndex()
+	if err != nil {
+		errHandler(err)
 	}
-	data, err := l.storage.Entries(lo, hi)
-	errHandler(err)
+	hi := l.LastIndex()
+	lo := l.stabled - base
+	data := l.entries[lo:hi]
 	return data
 }
 
@@ -111,17 +118,25 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	if l.applied >= l.committed {
 		return nil
 	}
+
 	data, err := l.storage.Entries(l.applied+1, l.committed)
 	errHandler(err)
 	return data
 }
 
-// LastIndex return the last index of the log entries
+// LastIndex returns the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
 	li, err := l.storage.LastIndex()
 	errHandler(err)
-	return li
+	return li + uint64(len(l.entries))
+}
+
+// FirstIndex returns the first index of the log entries
+func (l *RaftLog) FirstIndex() uint64 {
+	fi, err := l.storage.FirstIndex()
+	errHandler(err)
+	return fi
 }
 
 // Term return the term of the entry in the given index
@@ -134,4 +149,32 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 // A method used to check out whether there is unstable snapshot
 func (l *RaftLog) hasPendingSnapshot() bool {
 	return l.pendingSnapshot != nil && !IsEmptySnap(l.pendingSnapshot)
+}
+
+// A method used to check out whether the log is commited
+// doubt, how to identify long lost append logs
+func (l *RaftLog) checkLogCommitted(index uint64, target int) int {
+	if l.committing[index].applied {
+		// delete(l.committing, index) // ------> delete applied record
+		return 3
+	}
+	if l.committing[index].committed {
+		return 2
+	}
+	if l.committing[index].counter > target/2 {
+		l.committing[index].committed = true
+		return 1
+	}
+	return 0
+}
+
+// A method used to build committed record
+func (l *RaftLog) checkCommittedMapNil(index uint64) {
+	if l.committing[index] == nil {
+		l.committing[index] = &commitMsg{
+			counter:   1,
+			committed: false,
+			applied:   false,
+		}
+	}
 }
