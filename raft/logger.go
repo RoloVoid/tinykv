@@ -35,6 +35,9 @@ type Logger interface {
 var (
 	defaultLogger = &DefaultLogger{Logger: log.New(os.Stderr, "raft", log.LstdFlags)}
 	// build a logger to write log in a file
+	f, err      = os.OpenFile("raftLog.txt", os.O_CREATE|os.O_APPEND, 0666)
+	writeLogger = &DefaultLogger{Logger: log.New(f, "rafttest", log.LstdFlags)}
+
 	testLogger  = &DefaultLogger{}
 	loggerMutex sync.Mutex
 	raftLogger  = Logger(defaultLogger)

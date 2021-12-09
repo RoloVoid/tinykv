@@ -17,7 +17,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -84,6 +83,8 @@ type Config struct {
 	// Applied. If Applied is unset when restarting, raft might return previous
 	// applied entries. This is a very application dependent configuration.
 	Applied uint64
+	// Logger is used for raft log; learned from etcd
+	Logger Logger
 }
 
 func (c *Config) validate() error {
@@ -103,24 +104,12 @@ func (c *Config) validate() error {
 		return errors.New("storage cannot be nil")
 	}
 
+	// rolo: add one more validation check
+	if c.Logger == nil {
+		c.Logger = getLogger()
+	}
+
 	return nil
-}
-
-// a random tool from etcd
-type lockedRand struct {
-	mu   sync.Mutex
-	rand *rand.Rand
-}
-
-func (r *lockedRand) Intn(n int) int {
-	r.mu.Lock()
-	v := r.rand.Intn(n)
-	r.mu.Unlock()
-	return v
-}
-
-var globalRand = &lockedRand{
-	rand: rand.New(rand.NewSource(time.Now().UnixNano())),
 }
 
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
@@ -128,7 +117,7 @@ var globalRand = &lockedRand{
 type Progress struct {
 	// leader records the lastest match log and next log to send
 	Match, Next uint64
-	// doubt, whether should i add more related msgs
+	// rolo: doubt, whether should i add more related msgs
 }
 
 type Raft struct {
@@ -185,6 +174,8 @@ type Raft struct {
 	PendingConfIndex uint64
 	// a counter for check leader
 	Majority *majority
+	// logger from config
+	logger Logger
 }
 
 // majority function
@@ -206,9 +197,16 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	raftlog := newLog(c.Storage)
+	raftlog := newLogWithLogger(c.Storage, c.Logger)
+	// get hardstate from storage ---> confstate not clear yet
+	hs, _, err := c.Storage.InitialState()
+	if err != nil {
+		c.Logger.Panicf("create raft: something wrong when getting hs,cfs from storage:%s", err.Error())
+		panic(err)
+	}
+	// init votes ---> temp, maybe change
 	votes := make(map[uint64]bool)
-	//init prs
+	// init prs ---> temp, maybe change
 	prs := make(map[uint64]*Progress)
 	for _, id := range c.peers {
 		prs[id] = &Progress{
@@ -223,15 +221,78 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		votes:            votes,
 		Prs:              prs,
-		Majority:         resetMajority(), //for vote
+		Majority:         resetMajority(), // for vote
+		logger:           c.Logger,        // for log
 	}
 
+	// check if hardstate quarlified
+	if !IsEmptyHardState(hs) {
+		raft.loadState(hs)
+	}
+
+	// check if needed to reset applied
+	if c.Applied > 0 {
+		raftlog.setApplied(c.Applied)
+	}
+
+	// initialized as follower
+	raft.becomeFollower(raft.Term, None)
+
 	return raft
+}
+
+// loadstate check if hardstate is quarlified
+func (r *Raft) loadState(hs pb.HardState) {
+	if hs.Commit < r.RaftLog.committed || hs.Commit > r.RaftLog.LastIndex() {
+		r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, hs.Commit, r.RaftLog.committed, r.RaftLog.LastIndex())
+	}
+	r.RaftLog.committed = hs.Commit
+	r.Term = hs.Term
+	r.Vote = hs.Vote
+}
+
+// check if there is a leader
+func (r *Raft) hasLeader() bool {
+	return r.Lead != None
+}
+
+// get softstate
+func (r *Raft) softState() *SoftState {
+	return &SoftState{
+		Lead:      r.Lead,
+		RaftState: r.State,
+	}
+}
+
+// get hardstate
+func (r *Raft) hardState() *pb.HardState {
+	return &pb.HardState{
+		Term:   r.Term,
+		Vote:   r.Vote,
+		Commit: r.RaftLog.committed,
+	}
+}
+
+// a random tool, used for election randomized
+type lockedRand struct {
+	mu   sync.Mutex
+	rand *rand.Rand
 }
 
 // set random election time
 func (r *Raft) resetRandomElectionTimeout() {
 	r.random_ElectionTimeout = r.electionTimeout + globalRand.Intn(r.electionTimeout)
+}
+
+func (r *lockedRand) Intn(n int) int {
+	r.mu.Lock()
+	v := r.rand.Intn(n)
+	r.mu.Unlock()
+	return v
+}
+
+var globalRand = &lockedRand{
+	rand: rand.New(rand.NewSource(time.Now().UnixNano())),
 }
 
 func (r *Raft) pastElectionTimeout() bool {
@@ -248,52 +309,13 @@ func (r *Raft) reset() {
 	r.votes[r.id] = true // vote for oneself
 }
 
-// get softstate and hardstate
-func (r *Raft) softState() *SoftState {
-	return &SoftState{
-		Lead:      r.Lead,
-		RaftState: r.State,
-	}
-}
-
-func (r *Raft) hardState() *pb.HardState {
-	return &pb.HardState{
-		Term:   r.Term,
-		Vote:   r.Vote,
-		Commit: r.RaftLog.committed,
-	}
-}
-
 // send functions
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
-func (r *Raft) sendAppend(to uint64) bool {
-	// Your Code Here (2A).
-	var (
-		tempEntries []pb.Entry
-		logterm     uint64
-		term        uint64
-	)
-	//the factual index
-	lo := r.Prs[to].Next - r.RaftLog.FirstIndex()
-
-	tempEntries = r.RaftLog.entries[lo:]
-	// for noop
-	// if len(tempEntries) == 0 && lo == 0 {
-	// 	tempEntries = []pb.Entry{{}}
-	// 	term = 0
-	// } else {
-	// 	term = r.Term
-	// }
-	// doubt
-	term = r.Term
-	entries := make([]*pb.Entry, 0)
-	for i := 0; i < len(tempEntries); i++ {
-		tempEntries[i].Index = r.RaftLog.LastIndex()
-		entries = append(entries, &tempEntries[i])
-		logterm = tempEntries[i].Term
-	}
-
+// rolo:noopMsg is controlled by noop(bool)
+func (r *Raft) opSendAppend(to uint64, noop bool) bool {
+	term, Terr := r.RaftLog.Term(r.Prs[to].Next - 1)
+	entries, Eerr := r.RaftLog.entries()
 	appendmsg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
@@ -304,7 +326,11 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Entries: entries,
 	}
 	r.msgs = append(r.msgs, appendmsg)
-	return true
+}
+
+func (r *Raft) sendAppend(to uint64) bool {
+	// Your Code Here (2A).
+	return r.opSendAppend(to, true)
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
@@ -540,8 +566,6 @@ func (r *Raft) stepFollower(m pb.Message) error {
 		if r.campaign() {
 			r.becomeCandidate()
 			r.bcastRequestVote() // too clumsy /doubt
-			// doubt
-			fmt.Println("trigger1")
 		}
 		return nil
 	case pb.MessageType_MsgAppend: //doubt
@@ -596,8 +620,6 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.becomeFollower(m.Term, None) // if not reject, become follower
 		}
 		r.msgs = append(r.msgs, *mrvr)
-		// doubt
-		fmt.Println("trigger2")
 	case pb.MessageType_MsgHeartbeat: // require better design /doubt
 		if m.Term < r.Term {
 			return nil
@@ -606,8 +628,6 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.electionElapsed = 0
 		r.handleHeartbeat(m)
 	case pb.MessageType_MsgRequestVoteResponse:
-		// doubt
-		fmt.Println("trigger3")
 		r.votes[m.From] = !m.Reject
 		if m.Reject {
 			r.Majority.counterF++
@@ -615,8 +635,6 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.Majority.counterT++
 		}
 		if r.checkLeader() == 1 {
-			// doubt
-			fmt.Println("？")
 			r.becomeLeader()
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
