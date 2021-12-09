@@ -202,22 +202,23 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
+
+	// debug mode
+	// temp, _ := c.Logger.(*DefaultLogger)
+	// temp.EnableDebug()
+
 	raftlog := newLogWithLogger(c.Storage, c.Logger)
+
 	// get hardstate from storage ---> confstate not clear yet
-	hs, _, err := c.Storage.InitialState()
+	hs, cfs, err := c.Storage.InitialState()
 	if err != nil {
 		c.Logger.Panicf("create raft: something wrong when getting hs,cfs from storage:%s", err.Error())
-		panic(err)
 	}
-	// init votes ---> temp, maybe change
+
+	// init votes,prs ---> temp, maybe change
 	votes := make(map[uint64]bool)
-	// init prs ---> temp, maybe change
 	prs := make(map[uint64]*Progress)
-	for _, id := range c.peers {
-		prs[id] = &Progress{
-			Next: 1,
-		}
-	}
+
 	raft := &Raft{
 		id:               c.ID,
 		Lead:             None,
@@ -228,6 +229,15 @@ func newRaft(c *Config) *Raft {
 		Prs:              prs,
 		Majority:         resetMajority(), // for vote
 		logger:           c.Logger,        // for log
+	}
+	lastindex := raft.RaftLog.LastIndex()
+
+	// update prs
+	if c.peers == nil {
+		c.peers = cfs.Nodes
+	}
+	for _, peer := range c.peers {
+		raft.Prs[peer] = &Progress{Next: lastindex + 1, Match: 0}
 	}
 
 	// check if hardstate quarlified
@@ -278,7 +288,7 @@ func (r *Raft) hardState() *pb.HardState {
 	}
 }
 
-// a random tool, used for election randomized
+// a random tool, used for election randomized ---> inspired by etcd
 type lockedRand struct {
 	mu   sync.Mutex
 	rand *rand.Rand
@@ -317,65 +327,77 @@ func (r *Raft) reset() {
 // send functions
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
-// rolo:noopMsg is controlled by noop(bool)
-func (r *Raft) opSendAppend(to uint64, noop bool) bool {
-	pro := r.Prs[to]
-	// ---> get logterm from raftlog
-	term, Terr := r.RaftLog.Term(pro.Next - 1)
-	// ---> get part of applied entry from raftlog
-	entries, Eerr := r.RaftLog.getEntries(pro.Next)
-	// ---> whether send noop request
-	if len(entries) == 0 && !noop {
-		r.logger.Debugf("sending noop msg,rejected")
+func (r *Raft) sendAppend(to uint64) bool {
+	// Your Code Here (2A).
+	if !r.checkTargetPeer(to) {
 		return false
 	}
 
-	msg := pb.Message{}
-	msg.To = to
+	pro := r.Prs[to]
+	logterm, Terr := r.RaftLog.Term(pro.Next - 1)
+	entries, Eerr := r.RaftLog.getEntries(pro.Next)
 	// err when getting entries, then send snapshot
 	if Terr != nil || Eerr != nil {
-		msg.MsgType = pb.MessageType_MsgSnapshot
-		snapshot, err := r.RaftLog.snapshot()
-		if err != nil {
-			if err == ErrSnapshotTemporarilyUnavailable {
-				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
-				return false
-			}
-			panic(err) // TODO(bdarnell)
-		}
-		if IsEmptySnap(&snapshot) {
-			panic("need non-empty snapshot")
-		}
-		msg.Snapshot = &snapshot
-		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
-		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
-			r.id, r.RaftLog.FirstIndex(), r.RaftLog.committed, sindex, sterm, to, pro)
-		pro.BecomeSnapshot(sindex)
-		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pro)
+		return r.SendSnapshot(to)
 	}
+
+	var realentries []*pb.Entry
+	// inform sending noop request
+	if len(entries) == 0 || entries == nil {
+		r.logger.Debugf("sending noop msg")
+		realentries = nil
+	} else {
+		for i := 0; i < len(entries); i++ {
+			realentries = append(realentries, &entries[i])
+		}
+	}
+
 	appendmsg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
 		To:      to,
-		Term:    term, //doubt, whether it is from hardstate
-		Index:   r.Prs[to].Match,
+		Term:    r.Term,
+		Index:   r.Prs[to].Next - 1,
 		LogTerm: logterm,
-		Entries: entries,
+		Entries: realentries,
 	}
 	r.msgs = append(r.msgs, appendmsg)
+	return true
 }
 
-func (r *Raft) sendAppend(to uint64) bool {
-	// Your Code Here (2A).
-	return r.opSendAppend(to, true)
+// doubt: send snapshot when needed
+func (r *Raft) SendSnapshot(to uint64) bool {
+	pro := r.Prs[to]
+	msg := pb.Message{}
+	msg.To = to
+	msg.MsgType = pb.MessageType_MsgSnapshot
+	snapshot, err := r.RaftLog.snapshot()
+	if err != nil {
+		if err == ErrSnapshotTemporarilyUnavailable {
+			r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+			return false
+		}
+		panic(err) // TODO(bdarnell)
+	}
+	if IsEmptySnap(&snapshot) {
+		panic("snapshot is empty; need non-empty snapshot")
+	}
+	msg.Snapshot = &snapshot
+	sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
+	r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
+		r.id, r.RaftLog.FirstIndex(), r.RaftLog.committed, sindex, sterm, to, pro)
+	r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pro)
+	r.msgs = append(r.msgs, msg)
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-	// if r.id == to {
-	// 	return
-	// }
+	if !r.checkTargetPeer(to) {
+		return
+	}
+	// doubt: leader transferee
 	hbmsg := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
@@ -400,18 +422,15 @@ func (r *Raft) tick() {
 
 func (r *Raft) tickElection() {
 	r.electionElapsed++
-	// doubt
 	if r.pastElectionTimeout() {
-		// if r.electionElapsed >= r.electionTimeout {
 		r.electionElapsed = 0
 		msg := pb.Message{
 			MsgType: pb.MessageType_MsgHup,
 			From:    r.id,
 		}
 		err := r.Step(msg)
-		//doubt
 		if err != nil {
-			panic(err)
+			r.logger.Debug("handle election error")
 		}
 		if r.State == StateLeader && r.leadTransferee != None {
 			r.leadTransferee = None
@@ -452,13 +471,6 @@ func (r *Raft) tickHeartbeat() {
 
 }
 
-// check commit size, inspired by etcd
-func (r *Raft) reduceUncommitedSize(ents []pb.Entry) {
-	if r.RaftLog.unstableEntries() == nil || len(r.RaftLog.unstableEntries()) <= 0 {
-		return
-	}
-}
-
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
@@ -484,29 +496,26 @@ func (r *Raft) becomeCandidate() {
 	r.Vote = None // vote for itself,but do not record--->doubt
 }
 
-// doubt:noop: a special function for add noop entries
-// func (r *Raft) appendNoopEntries() {
-// 	noop := pb.Entry{
-// 		EntryType: pb.EntryType_EntryNormal,
-// 		Term:      r.Term,
-// 		Index:     r.RaftLog.LastIndex() + 1,
-// 	}
-// 	// entries := []pb.Entry{noop}
-// 	// assert, append
-// 	// storage1, _ := r.RaftLog.storage.(*MemoryStorage)
-// 	// storage1.Append(entries)
-// 	// append to raftlog entries
-// 	r.RaftLog.entries = append(r.RaftLog.entries, noop)
-// }
-
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
 	// reset related parameter
 	r.State = StateLeader
-	r.Lead = None // asign leader to none when node is leader
-	// r.appendNoopEntries()
+	r.Lead = None
+	r.leadTransferee = None
+	lastIndex := r.RaftLog.LastIndex()
+	// reset prs
+	for peer := range r.Prs {
+		r.Prs[peer].Next = lastIndex + 1
+		r.Prs[peer].Match = 0
+	}
+	r.Prs[r.id].Match = r.Prs[r.id].Next
+	r.Prs[r.id].Next += 1
+	// noop entry, in order to make leader the newest
+	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: r.RaftLog.LastIndex() + 1})
+	r.bcastAppend()
+
 }
 
 // bcast functions
@@ -621,7 +630,7 @@ func (r *Raft) stepFollower(m pb.Message) error {
 		}
 		r.msgs = append(r.msgs, *mrvr)
 		return nil
-	case pb.MessageType_MsgHeartbeat: //doubt
+	case pb.MessageType_MsgHeartbeat:
 		hbr := r.responseToHeartbeat(m)
 		if hbr != nil {
 			r.electionElapsed = 0
@@ -675,7 +684,6 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.becomeLeader()
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
-			r.bcastAppend()
 		} else if r.checkLeader() == 2 { //doubt
 			r.becomeFollower(m.Term, m.From)
 			r.electionElapsed = 0
@@ -862,4 +870,10 @@ func (r *Raft) checkLogCommitted(index uint64) int {
 // create one record
 func (r *Raft) checkCommittedMapNil(index uint64) {
 	r.RaftLog.checkCommittedMapNil(index)
+}
+
+// check if target peer exists
+func (r *Raft) checkTargetPeer(to uint64) bool {
+	_, ok := r.Prs[to]
+	return ok
 }

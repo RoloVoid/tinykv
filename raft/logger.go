@@ -1,4 +1,4 @@
-// in order to debug easier, inspired by etcd and extended based on it
+// in order to debug easier, inspired by etcd and changed based on it
 package raft
 
 import (
@@ -9,24 +9,11 @@ import (
 )
 
 type Logger interface {
-	//personal test mode ---> for single test instead of fmt.Println
-	Test(...interface{})
-	Testf(string, ...interface{})
-
 	Debug(...interface{})
 	Debugf(string, ...interface{})
 
 	Info(...interface{})
 	Infof(string, ...interface{})
-
-	Error(...interface{})
-	Errorf(string, ...interface{})
-
-	Warning(v ...interface{})
-	Warningf(format string, v ...interface{})
-
-	Fatal(...interface{})
-	Fatalf(string, ...interface{})
 
 	Panic(...interface{})
 	Panicf(string, ...interface{})
@@ -34,7 +21,7 @@ type Logger interface {
 
 var (
 	defaultLogger = &DefaultLogger{Logger: log.New(os.Stderr, "raft", log.LstdFlags)}
-	// build a logger to write log in a file
+	// build a logger to write log in a file ---> testing
 	f, err      = os.OpenFile("raftLog.txt", os.O_CREATE|os.O_APPEND, 0666)
 	writeLogger = &DefaultLogger{Logger: log.New(f, "rafttest", log.LstdFlags)}
 
@@ -63,11 +50,9 @@ func getLogger() Logger {
 	return raftLogger
 }
 
-// ----> learn from etcd
 type DefaultLogger struct {
 	*log.Logger
 	debug bool
-	test  bool
 }
 
 func (l *DefaultLogger) EnableTimestamps() {
@@ -76,23 +61,6 @@ func (l *DefaultLogger) EnableTimestamps() {
 
 func (l *DefaultLogger) EnableDebug() {
 	l.debug = true
-}
-
-// ----> enable single test
-func (l *DefaultLogger) EnableTest() {
-	l.test = true
-}
-
-func (l *DefaultLogger) Test(v ...interface{}) {
-	if l.test {
-		l.Output(calldepth, header("DEBUG", fmt.Sprint(v...)))
-	}
-}
-
-func (l *DefaultLogger) Testf(format string, v ...interface{}) {
-	if l.test {
-		l.Output(calldepth, header("TEST", fmt.Sprintf(format, v...)))
-	}
 }
 
 func (l *DefaultLogger) Debug(v ...interface{}) {
@@ -113,32 +81,6 @@ func (l *DefaultLogger) Info(v ...interface{}) {
 
 func (l *DefaultLogger) Infof(format string, v ...interface{}) {
 	l.Output(calldepth, header("INFO", fmt.Sprintf(format, v...)))
-}
-
-func (l *DefaultLogger) Error(v ...interface{}) {
-	l.Output(calldepth, header("ERROR", fmt.Sprint(v...)))
-}
-
-func (l *DefaultLogger) Errorf(format string, v ...interface{}) {
-	l.Output(calldepth, header("ERROR", fmt.Sprintf(format, v...)))
-}
-
-func (l *DefaultLogger) Warning(v ...interface{}) {
-	l.Output(calldepth, header("WARN", fmt.Sprint(v...)))
-}
-
-func (l *DefaultLogger) Warningf(format string, v ...interface{}) {
-	l.Output(calldepth, header("WARN", fmt.Sprintf(format, v...)))
-}
-
-func (l *DefaultLogger) Fatal(v ...interface{}) {
-	l.Output(calldepth, header("FATAL", fmt.Sprint(v...)))
-	os.Exit(1)
-}
-
-func (l *DefaultLogger) Fatalf(format string, v ...interface{}) {
-	l.Output(calldepth, header("FATAL", fmt.Sprintf(format, v...)))
-	os.Exit(1)
 }
 
 func (l *DefaultLogger) Panic(v ...interface{}) {

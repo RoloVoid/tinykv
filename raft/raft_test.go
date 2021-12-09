@@ -1457,15 +1457,13 @@ func TestSplitVote2AA(t *testing.T) {
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
 	// simulate leader down. followers start split vote.
-	// doubt
-	fmt.Println("start")
+
 	nt.isolate(1)
 	nt.send([]pb.Message{
 		{From: 2, To: 2, MsgType: pb.MessageType_MsgHup},
 		{From: 3, To: 3, MsgType: pb.MessageType_MsgHup},
 	}...)
-	// doubt
-	fmt.Println("end")
+
 	// check whether the term values are expected
 	// n2.Term == 3
 	// n3.Term == 3
