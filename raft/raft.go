@@ -105,7 +105,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// a random tool from etcd
+// a random tool inspired by etcd
 type lockedRand struct {
 	mu   sync.Mutex
 	rand *rand.Rand
@@ -206,8 +206,16 @@ func newRaft(c *Config) *Raft {
 	}
 	// Your Code Here (2A).
 	raftlog := newLog(c.Storage)
+	hs, cfs, err := c.Storage.InitialState()
+	if err != nil {
+		panic(err) // storage fault, it can be ignored
+	}
+
+	// init prs and nodes
+	if c.peers == nil {
+		c.peers = cfs.Nodes
+	}
 	votes := make(map[uint64]bool)
-	//init prs
 	prs := make(map[uint64]*Progress)
 	for _, id := range c.peers {
 		prs[id] = &Progress{
@@ -217,6 +225,8 @@ func newRaft(c *Config) *Raft {
 	raft := &Raft{
 		id:               c.ID,
 		Lead:             None,
+		Term:             hs.Term,
+		Vote:             hs.Vote,
 		RaftLog:          raftlog,
 		heartbeatTimeout: c.HeartbeatTick,
 		electionTimeout:  c.ElectionTick,
@@ -224,7 +234,16 @@ func newRaft(c *Config) *Raft {
 		Prs:              prs,
 		Majority:         resetMajority(), //for vote
 	}
+	// update applied
+	if c.Applied > 0 {
+		raft.RaftLog.applied = c.Applied
+	}
 
+	// generate peers of region
+	lastIndex := raft.RaftLog.LastIndex()
+	for _, peer := range c.peers {
+		raft.Prs[peer] = &Progress{Next: lastIndex + 1, Match: 0}
+	}
 	return raft
 }
 
@@ -268,6 +287,11 @@ func (r *Raft) hardState() *pb.HardState {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
+	// if target does not exist
+	if _, ok := r.Prs[to]; !ok {
+		return false
+	}
+
 	var (
 		tempEntries []pb.Entry
 		logterm     uint64
