@@ -17,6 +17,7 @@ package raft
 
 import (
 	"errors"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -25,7 +26,11 @@ import (
 )
 
 // None is a placeholder node ID used when there is no leader.
-const None uint64 = 0
+// noLimit means no limit when getting datas
+const (
+	None    uint64 = 0
+	noLimit        = math.MaxUint64
+)
 
 // StateType represents the role of a node in a cluster.
 type StateType uint64
@@ -314,8 +319,40 @@ func (r *Raft) reset() {
 // current commit index to the given peer. Returns true if a message was sent.
 // rolo:noopMsg is controlled by noop(bool)
 func (r *Raft) opSendAppend(to uint64, noop bool) bool {
-	term, Terr := r.RaftLog.Term(r.Prs[to].Next - 1)
-	entries, Eerr := r.RaftLog.entries()
+	pro := r.Prs[to]
+	// ---> get logterm from raftlog
+	term, Terr := r.RaftLog.Term(pro.Next - 1)
+	// ---> get part of applied entry from raftlog
+	entries, Eerr := r.RaftLog.getEntries(pro.Next)
+	// ---> whether send noop request
+	if len(entries) == 0 && !noop {
+		r.logger.Debugf("sending noop msg,rejected")
+		return false
+	}
+
+	msg := pb.Message{}
+	msg.To = to
+	// err when getting entries, then send snapshot
+	if Terr != nil || Eerr != nil {
+		msg.MsgType = pb.MessageType_MsgSnapshot
+		snapshot, err := r.RaftLog.snapshot()
+		if err != nil {
+			if err == ErrSnapshotTemporarilyUnavailable {
+				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+				return false
+			}
+			panic(err) // TODO(bdarnell)
+		}
+		if IsEmptySnap(&snapshot) {
+			panic("need non-empty snapshot")
+		}
+		msg.Snapshot = &snapshot
+		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
+		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
+			r.id, r.RaftLog.FirstIndex(), r.RaftLog.committed, sindex, sterm, to, pro)
+		pro.BecomeSnapshot(sindex)
+		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pro)
+	}
 	appendmsg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,

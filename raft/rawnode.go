@@ -170,7 +170,7 @@ func (rn *RawNode) Ready() Ready {
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
-	// Your Code Here (2A).  ----->2C
+	// Your Code Here (2A).  ----->also 2C
 	r := rn.Raft
 	if !r.softState().equal(rn.prevSfState) {
 		return true
