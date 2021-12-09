@@ -115,12 +115,11 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	if l.applied >= l.committed {
+	if l.applied > l.committed {
 		return nil
 	}
-
-	data, err := l.storage.Entries(l.applied+1, l.committed)
-	errHandler(err)
+	// doubt
+	data := l.entries[l.applied:l.committed]
 	return data
 }
 

@@ -410,11 +410,12 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	r.becomeLeader()
 	commitNoopEntry(r, s)
 	li := r.RaftLog.LastIndex()
-	r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
 
+	r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
 	for _, m := range r.readMessages() {
 		r.Step(acceptAndReply(m))
 	}
+	// doubt
 
 	if g := r.RaftLog.committed; g != li+1 {
 		t.Errorf("committed = %d, want %d", g, li+1)
@@ -497,15 +498,14 @@ func TestLeaderCommitPrecedingEntries2AB(t *testing.T) {
 		r.Term = 2
 		r.becomeCandidate()
 		r.becomeLeader()
-		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
 		// doubt
 		storage1, _ := r.RaftLog.storage.(*MemoryStorage)
-		fmt.Println(r.RaftLog.entries, storage1.ents, r.RaftLog.LastIndex(), r.RaftLog.committed, "from test")
+		fmt.Println(r.RaftLog.LastIndex(), storage1.ents, "test")
+		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
+
 		for _, m := range r.readMessages() {
 			r.Step(acceptAndReply(m))
 		}
-		// doubt
-		fmt.Println(r.RaftLog.entries, r.RaftLog.LastIndex(), r.RaftLog.committed, "from test2")
 
 		li := uint64(len(tt))
 		wents := append(tt, pb.Entry{Term: 3, Index: li + 1}, pb.Entry{Term: 3, Index: li + 2, Data: []byte("some data")})

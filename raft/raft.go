@@ -17,6 +17,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -278,12 +279,14 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 	tempEntries = r.RaftLog.entries[lo:]
 	// for noop
-	if len(tempEntries) == 0 && lo == 0 {
-		tempEntries = []pb.Entry{{}}
-		term = 0
-	} else {
-		term = r.Term
-	}
+	// if len(tempEntries) == 0 && lo == 0 {
+	// 	tempEntries = []pb.Entry{{}}
+	// 	term = 0
+	// } else {
+	// 	term = r.Term
+	// }
+	// doubt
+	term = r.Term
 	entries := make([]*pb.Entry, 0)
 	for i := 0; i < len(tempEntries); i++ {
 		tempEntries[i].Index = r.RaftLog.LastIndex()
@@ -450,6 +453,7 @@ func (r *Raft) bcastRequestVote() {
 		if r.id == id {
 			continue
 		}
+		// there is one check that won't vote for LastIndex() lesser than itself
 		mrv := pb.Message{
 			MsgType: pb.MessageType_MsgRequestVote,
 			From:    r.id,
@@ -484,9 +488,11 @@ func (r *Raft) bcastHeartBeat() {
 func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 	check := false
 	// maybe not here /doubt
-	if m.Term < r.Term || (r.Vote != None && r.Vote != m.From) || (m.Term == r.Term && r.State != StateFollower) {
+	// || m.Term == r.Term && r.State != StateFollower
+	if m.Term < r.Term || (r.Vote != None && r.Vote != m.From) {
 		check = true
 	}
+
 	if !check {
 		r.Vote = m.From
 	}
@@ -534,6 +540,8 @@ func (r *Raft) stepFollower(m pb.Message) error {
 		if r.campaign() {
 			r.becomeCandidate()
 			r.bcastRequestVote() // too clumsy /doubt
+			// doubt
+			fmt.Println("trigger1")
 		}
 		return nil
 	case pb.MessageType_MsgAppend: //doubt
@@ -584,10 +592,12 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.handleAppendEntries(m) //put this msg in its log and response
 	case pb.MessageType_MsgRequestVote: //check and respond and update votes
 		mrvr := r.responseToVote(m) //not a good design /doubt
-		if !mrvr.Reject {
+		if !mrvr.Reject && m.Term > r.Term {
 			r.becomeFollower(m.Term, None) // if not reject, become follower
 		}
 		r.msgs = append(r.msgs, *mrvr)
+		// doubt
+		fmt.Println("trigger2")
 	case pb.MessageType_MsgHeartbeat: // require better design /doubt
 		if m.Term < r.Term {
 			return nil
@@ -596,6 +606,8 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.electionElapsed = 0
 		r.handleHeartbeat(m)
 	case pb.MessageType_MsgRequestVoteResponse:
+		// doubt
+		fmt.Println("trigger3")
 		r.votes[m.From] = !m.Reject
 		if m.Reject {
 			r.Majority.counterF++
@@ -603,6 +615,8 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.Majority.counterT++
 		}
 		if r.checkLeader() == 1 {
+			// doubt
+			fmt.Println("？")
 			r.becomeLeader()
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
@@ -677,7 +691,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	} else {
 		return
 	}
-	// doubt:-----> no safety method
+	// doubt:-----> no safety method \\ not match
 	for _, item := range m.Entries {
 		r.RaftLog.entries = append(r.RaftLog.entries, *item)
 	}
@@ -702,10 +716,14 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	// doubt: update progress based on reject and index
 	if !m.Reject {
 		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
-			r.checkCommittedMapNil(i)
-			r.RaftLog.committing[i].counter++ // committed + 1
-			if r.checkLogCommitted(i) == 1 && m.Entries != nil {
-				r.RaftLog.committed = i
+			if m.Term != 0 { // for noop
+				r.checkCommittedMapNil(i)
+				r.RaftLog.committing[i].counter++ // committed + 1
+				// doubt
+				var j int
+				if j = r.checkLogCommitted(i); j == 1 {
+					r.RaftLog.committed = i
+				}
 			}
 		}
 		// for noop

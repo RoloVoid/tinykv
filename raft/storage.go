@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/pingcap-incubator/tinykv/log"
@@ -112,8 +111,7 @@ func (ms *MemoryStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
-	// doubt
-	fmt.Println(lo, hi, offset)
+
 	if lo <= offset {
 		return nil, ErrCompacted
 	}
