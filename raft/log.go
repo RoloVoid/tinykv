@@ -84,7 +84,7 @@ func newLog(storage Storage) *RaftLog {
 	// errHandler(err)
 	fi, _ := storage.FirstIndex()
 	// errHandler(err)
-	entries, _ := storage.Entries(fi-1, li+1)
+	entries, _ := storage.Entries(fi, li+1)
 	// errHandler(err)
 	hd, _, _ := storage.InitialState()
 	// errHandler(err)
@@ -93,7 +93,7 @@ func newLog(storage Storage) *RaftLog {
 		storage:    storage,
 		committed:  hd.GetCommit(),
 		applied:    fi - 1,
-		stabled:    li + 1, // is not actually stabled, real stabled is li,which means stabled)
+		stabled:    li, // is not actually stabled, real stabled is li,which means stabled)
 		entries:    entries,
 		committing: make(map[uint64]*commitMsg),
 	}
@@ -143,7 +143,7 @@ func (l *RaftLog) maybeLastIndex() (uint64, bool) {
 	// if there are unstable entries, stabled + unstabled - 1 = lastindex
 	// len(l.entries)=0, means there might be a compact action, which means a snapshot
 	if len := len(l.entries); len != 0 {
-		return l.stabled + uint64(len) - 1, true
+		return l.FirstIndex() + uint64(len) - 1, true
 	}
 	// if there is no stable entries, then get last index from snapshot
 	if l.pendingSnapshot != nil {
@@ -174,6 +174,7 @@ func (l *RaftLog) maybeTerm(i uint64) (uint64, bool) {
 }
 
 // unstableEntries return all the unstable entries
+// now stabled ==offset
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
 	if len(l.entries) == 0 {
