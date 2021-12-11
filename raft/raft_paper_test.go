@@ -498,9 +498,7 @@ func TestLeaderCommitPrecedingEntries2AB(t *testing.T) {
 		r.Term = 2
 		r.becomeCandidate()
 		r.becomeLeader()
-		// doubt
-		storage1, _ := r.RaftLog.storage.(*MemoryStorage)
-		fmt.Println(r.RaftLog.LastIndex(), storage1.ents, "test")
+
 		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
 
 		for _, m := range r.readMessages() {

@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -40,6 +41,7 @@ type RaftLog struct {
 	applied uint64
 
 	// rolo: the next three become unstable part
+	// because of my design index <= stabled --> index < stabled as offset
 	// log entries with index <= stabled are persisted to storage.
 	// It is used to record the logs that are not persisted by storage yet.
 	// Everytime handling `Ready`, the unstabled logs will be included.
@@ -62,16 +64,15 @@ type RaftLog struct {
 	logger Logger
 }
 
+// one simple struct to check if committed
 type commitMsg struct {
 	counter   int
 	committed bool
-	applied   bool
 }
 
 func errHandler(err error) {
 	if err != nil {
-		panic(err)
-		//log.Errorf(err.Error())
+		log.Errorf(err.Error())
 	}
 }
 
@@ -79,19 +80,20 @@ func errHandler(err error) {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	lastindex, err := storage.LastIndex()
-	errHandler(err)
-	// fi, err := storage.FirstIndex()
+	li, _ := storage.LastIndex()
 	// errHandler(err)
-	// doubt ---> assert is dirty
-	// doubt ---> storage is not
-	entries := make([]pb.Entry, 0)
+	fi, _ := storage.FirstIndex()
+	// errHandler(err)
+	entries, _ := storage.Entries(fi-1, li+1)
+	// errHandler(err)
+	hd, _, _ := storage.InitialState()
+	// errHandler(err)
 	// initialize, all the pointers are at the startline
 	NewRaftLog := &RaftLog{
 		storage:    storage,
-		committed:  lastindex,
-		applied:    lastindex,
-		stabled:    lastindex,
+		committed:  hd.GetCommit(),
+		applied:    fi - 1,
+		stabled:    li + 1, // is not actually stabled, real stabled is li,which means stabled)
 		entries:    entries,
 		committing: make(map[uint64]*commitMsg),
 	}
@@ -138,8 +140,8 @@ func (l *RaftLog) maybeFirstIndex() (uint64, bool) {
 // maybeLastIndex returns the last index if it has at least one
 // unstable entry or snapshot.
 func (l *RaftLog) maybeLastIndex() (uint64, bool) {
-	// if there are unstable entries, stabled + unsstabled - 1 = lastindex
-	// len(l.entries)=0, means there might be a compact action,which means a snapshot
+	// if there are unstable entries, stabled + unstabled - 1 = lastindex
+	// len(l.entries)=0, means there might be a compact action, which means a snapshot
 	if len := len(l.entries); len != 0 {
 		return l.stabled + uint64(len) - 1, true
 	}
@@ -177,7 +179,7 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	if len(l.entries) == 0 {
 		return nil
 	}
-	return l.entries
+	return l.entries[l.stabled:]
 }
 
 // nextEnts returns all the committed but not applied entries
@@ -234,14 +236,20 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	}
 	// get term from unstable | snapshot
 	if t, ok := l.maybeTerm(i); ok {
+		// debug
+		l.logger.Debug("return from unstable")
 		return t, nil
 	}
 	// if not, get it from storage
 	t, err := l.storage.Term(i)
 	if err == nil {
+		// debug
+		l.logger.Debug("return from storage")
 		return t, nil
 	}
 	if err == ErrCompacted || err == ErrUnavailable {
+		// debug
+		l.logger.Debug("return from error2")
 		return 0, err
 	} else {
 		l.logger.Panicf("something went wrong in log.Term when trying to get term from storage, unexpected errors")
@@ -325,10 +333,6 @@ func (l *RaftLog) snapshot() (pb.Snapshot, error) {
 // A method used to check out whether the log is commited
 // doubt, how to identify long lost append logs
 func (l *RaftLog) checkLogCommitted(index uint64, target int) int {
-	if l.committing[index].applied {
-		// delete(l.committing, index) // ------> delete applied record
-		return 3
-	}
 	if l.committing[index].committed {
 		return 2
 	}
@@ -345,7 +349,6 @@ func (l *RaftLog) checkCommittedMapNil(index uint64) {
 		l.committing[index] = &commitMsg{
 			counter:   1,
 			committed: false,
-			applied:   false,
 		}
 	}
 }
