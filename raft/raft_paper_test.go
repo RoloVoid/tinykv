@@ -60,9 +60,7 @@ func testUpdateTermFromMessage(t *testing.T, state StateType) {
 		r.becomeCandidate()
 		r.becomeLeader()
 	}
-
 	r.Step(pb.Message{MsgType: pb.MessageType_MsgAppend, Term: 2})
-
 	if r.Term != 2 {
 		t.Errorf("term = %d, want %d", r.Term, 2)
 	}
@@ -658,8 +656,6 @@ func TestFollowerAppendEntries2AB(t *testing.T) {
 		storage.Append([]pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}})
 		r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, storage)
 		r.becomeFollower(2, 2)
-		// doubt
-		fmt.Println(r.RaftLog.entries)
 		r.Step(pb.Message{From: 2, To: 1, MsgType: pb.MessageType_MsgAppend, Term: tt.lterm, LogTerm: tt.term, Index: tt.index, Entries: tt.ents})
 
 		wents := make([]pb.Entry, 0, len(tt.wents))
