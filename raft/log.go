@@ -127,53 +127,6 @@ func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
 }
 
-// maybeFirstIndex returns the index of the first possible entry in entries
-// if it has a snapshot.
-func (l *RaftLog) maybeFirstIndex() (uint64, bool) {
-	if l.pendingSnapshot != nil {
-		return l.pendingSnapshot.Metadata.Index + 1, true
-	}
-	return 0, false
-}
-
-// maybeLastIndex returns the last index if it has at least one
-// unstable entry or snapshot.
-// func (l *RaftLog) maybeLastIndex() (uint64, bool) {
-// 	// if there are unstable entries, stabled + unstabled - 1 = lastindex
-// 	// len(l.entries)=0, means there might be a compact action, which means a snapshot
-// 	if len := len(l.entries); len != 0 {
-// 		return l.FirstIndex() + uint64(len) - 1, true
-// 	}
-// 	// if there is no stable entries, then get last index from snapshot
-// 	if l.pendingSnapshot != nil {
-// 		return l.pendingSnapshot.Metadata.Index, true
-// 	}
-// 	return 0, false
-// }
-
-// check if term is available
-// func (l *RaftLog) maybeTerm(i uint64) (uint64, bool) {
-// 	// ---> if request index < current stabled, get it from snapshot
-// 	if i <= l.stabled {
-// 		if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
-// 			return l.pendingSnapshot.Metadata.Term, true
-// 		}
-// 		return 0, false
-// 	}
-
-// 	last, ok := l.maybeLastIndex()
-// 	if !ok {
-// 		return 0, false
-// 	}
-// 	if i > last {
-// 		return 0, false
-// 	}
-
-// 	return l.entries[i-l.stabled-1].Term, true
-// }
-
-// unstableEntries return all the unstable entries
-// now stabled ==offset
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
 	if len(l.entries) == 0 {
@@ -200,122 +153,43 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex returns the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	// get last index from unstable | snapshot
-	if i, ok := l.maybeLastIndex(); ok {
-		return i
+	// if no record,get it from storage
+	if len(l.entries) == 0 {
+		return l.stabled
 	}
-	// if not , get it from storage
-	li, err := l.storage.LastIndex()
-	if err != nil {
-		l.logger.Panicf("something went wrong when getting first index from storage: %s", err.Error())
-		panic(err)
-	}
-	return li
+	return l.entries[len(l.entries)-1].Index
 }
 
 // FirstIndex returns the first index of the log entries
 func (l *RaftLog) FirstIndex() uint64 {
-	// get first index from unstable | snapshot
-	if i, ok := l.maybeFirstIndex(); ok {
-		return i
+	if len(l.entries) == 0 {
+		i, _ := l.storage.FirstIndex()
+		return i - 1
 	}
-	// if not, get it from storage
-	fi, err := l.storage.FirstIndex()
-	if err != nil {
-		l.logger.Panicf("something went wrong when getting first index from storage: %s", err.Error())
-		panic(err)
-	}
-	return fi
+	return l.entries[0].Index
 }
 
 // Term returns the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	if i < l.FirstIndex()-1 || i > l.LastIndex() {
-		return 0, nil
-	}
-	// get term from unstable | snapshot
-	if t, ok := l.maybeTerm(i); ok {
-		// debug
-		l.logger.Debug("return from unstable")
-		return t, nil
+	if len(l.entries) > 0 {
+		if i >= l.FirstIndex() {
+			index := i - l.FirstIndex()
+			if index >= uint64(len(l.entries)) {
+				return 0, ErrUnavailable
+			}
+			return l.entries[index].Term, nil
+		}
 	}
 	// if not, get it from storage
-	t, err := l.storage.Term(i)
-	if err == nil {
-		// debug
-		l.logger.Debug("return from storage")
-		return t, nil
+	term, err := l.storage.Term(i)
+	if err == ErrUnavailable && !IsEmptySnap(l.pendingSnapshot) {
+		if i < l.pendingSnapshot.Metadata.Index {
+			err = ErrCompacted
+		}
 	}
-	if err == ErrCompacted || err == ErrUnavailable {
-		// debug
-		l.logger.Debug("return from error2")
-		return 0, err
-	} else {
-		l.logger.Panicf("something went wrong in log.Term when trying to get term from storage, unexpected errors")
-		panic(err)
-	}
+	return term, err
 }
-
-// getEntries gets from lo to lastindex
-// rolo: currently ,there is no need to limit entries numbers;
-// but if there is a new node for a group that works for a long time, it will be slower
-// func (l *RaftLog) getEntries(lo uint64) ([]pb.Entry, error) {
-// 	if lo > l.LastIndex() {
-// 		return nil, nil
-// 	}
-// 	return l.pieces(lo, l.LastIndex()+1)
-// }
-
-// piecesUnstabled returns a target piece from unstable entries [lo,hi]
-// func (l *RaftLog) piecesUnstabled(lo, hi uint64) []pb.Entry {
-// 	l.mustCheckOutOfBoundsUnstable(lo, hi)
-// 	return l.entries[lo-l.FirstIndex():]
-// }
-
-// // pieces returns the target entries with given range [lo,hi)
-// func (l *RaftLog) pieces(lo, hi uint64) ([]pb.Entry, error) {
-// 	err := l.mustCheckOutOfBounds(lo, hi)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	if lo == hi {
-// 		return nil, nil
-// 	}
-// 	var ents []pb.Entry
-// 	// if lo comes in the storage, then get it from storage
-// 	if lo < l.stabled {
-// 		storedEnts, err := l.storage.Entries(lo, min(hi, l.stabled))
-// 		if err == ErrCompacted {
-// 			return nil, err
-// 		} else if err == ErrUnavailable {
-// 			l.logger.Panicf("entries[%d:%d) is unavailable from storage", lo, min(hi, l.stabled))
-// 		} else if err != nil {
-// 			panic(err)
-// 		}
-
-// 		// check if ents has reached the size limitation
-// 		if uint64(len(storedEnts)) < min(hi, l.stabled)-lo {
-// 			return storedEnts, nil
-// 		}
-
-// 		ents = storedEnts
-// 	}
-// 	// means there are still some unstable entries need to be committed
-// 	if hi > l.stabled {
-// 		unstable := l.piecesUnstabled(max(lo, l.stabled+1), hi)
-// 		if len(ents) > 0 {
-// 			// then put stable and unstable entries together to apply
-// 			all := make([]pb.Entry, len(ents)+len(unstable))
-// 			n := copy(all, ents)
-// 			copy(all[n:], unstable)
-// 			ents = all
-// 		} else {
-// 			ents = unstable
-// 		}
-// 	}
-// 	return ents, nil
-// }
 
 // A method used to check out whether there is unstable snapshot
 func (l *RaftLog) hasPendingSnapshot() bool {
@@ -352,32 +226,3 @@ func (l *RaftLog) checkCommittedMapNil(index uint64) {
 		}
 	}
 }
-
-// // boundary check --> stable and unstable
-// // l.stabled <= lo <= hi <= u.stabled+len(ustable entries)
-// func (l *RaftLog) mustCheckOutOfBoundsUnstable(lo, hi uint64) {
-// 	if lo > hi {
-// 		l.logger.Panicf("invalid unstable.piece %d > %d", lo, hi)
-// 	}
-// 	upper := l.FirstIndex() + uint64(len(l.entries))
-// 	if lo < l.stabled || hi > upper {
-// 		l.logger.Panicf("unstable.piece[%d,%d) out of bound [%d,%d]", lo, hi, l.stabled+1, upper)
-// 	}
-// }
-
-// // l.FirstIndex <= lo <= hi <= l.FirstIndex + len(l.entries)
-// func (l *RaftLog) mustCheckOutOfBounds(lo, hi uint64) error {
-// 	if lo > hi {
-// 		l.logger.Panicf("invalid slice %d > %d", lo, hi)
-// 	}
-// 	fi := l.FirstIndex()
-// 	if lo < fi {
-// 		return ErrCompacted
-// 	}
-
-// 	length := l.LastIndex() + 1 - fi
-// 	if hi > fi+length {
-// 		l.logger.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.LastIndex())
-// 	}
-// 	return nil
-// }

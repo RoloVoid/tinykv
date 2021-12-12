@@ -17,6 +17,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -325,12 +326,14 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 	pro := r.Prs[to]
 	logterm, Terr := r.RaftLog.Term(pro.Next - 1)
-	entries, Eerr := r.RaftLog.getEntries(pro.Next)
 
-	// err when getting entries, then send snapshot
-	if Terr != nil || Eerr != nil {
+	// err when getting term, then send snapshot
+	if Terr != nil {
 		return r.SendSnapshot(to)
 	}
+
+	fi := r.RaftLog.FirstIndex()
+	entries := r.RaftLog.entries[pro.Next-fi:]
 
 	var realentries []*pb.Entry
 	if len(entries) == 0 || entries == nil {
@@ -367,7 +370,7 @@ func (r *Raft) SendSnapshot(to uint64) bool {
 			r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
 			return false
 		}
-		panic(err) // TODO(bdarnell)
+		panic(err)
 	}
 	if IsEmptySnap(&snapshot) {
 		panic("snapshot is empty; need non-empty snapshot")
@@ -571,9 +574,13 @@ func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 		r.Vote = None
 		r.Term = m.Term
 	}
+
 	if r.Vote == m.From || r.Vote == None {
+
 		li := r.RaftLog.LastIndex()
 		lastlogTerm, _ := r.RaftLog.Term(li)
+		// doubt
+		fmt.Println("test", m.LogTerm, lastlogTerm, m.Index, li)
 		if m.LogTerm > lastlogTerm ||
 			(m.LogTerm == lastlogTerm && m.Index >= li) {
 			r.Vote = m.From
@@ -589,6 +596,7 @@ func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 			}
 		}
 	}
+
 	return &pb.Message{
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		From:    r.id,
