@@ -17,7 +17,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -358,6 +357,20 @@ func (r *Raft) sendAppend(to uint64) bool {
 	return true
 }
 
+// doubt: whether should I add more options
+func (r *Raft) SendAppendEntryResponse(to, index uint64, reject bool) {
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgAppendResponse,
+		From:    r.id,
+		To:      to,
+		Index:   index,
+		Term:    r.Term,
+		Reject:  reject,
+	}
+	r.msgs = append(r.msgs, msg)
+	return
+}
+
 // doubt: send snapshot when needed
 func (r *Raft) SendSnapshot(to uint64) bool {
 	pro := r.Prs[to]
@@ -579,8 +592,6 @@ func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 
 		li := r.RaftLog.LastIndex()
 		lastlogTerm, _ := r.RaftLog.Term(li)
-		// doubt
-		fmt.Println("test", m.LogTerm, lastlogTerm, m.Index, li)
 		if m.LogTerm > lastlogTerm ||
 			(m.LogTerm == lastlogTerm && m.Index >= li) {
 			r.Vote = m.From
@@ -779,8 +790,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	if m.LogTerm != term {
 		reject = true
 	}
-	// 3. sending msg
-	rm := pb.Message{}
+
 	if !reject {
 		// get current raft lastindex
 		for i, item := range m.Entries {
@@ -806,33 +816,20 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 		// if not reject, update committed from leader
 		r.RaftLog.committed = m.Commit
-		rm = pb.Message{
-			MsgType: pb.MessageType_MsgAppendResponse,
-			From:    r.id,
-			To:      r.Lead,
-			Term:    m.Term,
-			Index:   r.RaftLog.LastIndex(),
-			Reject:  reject,
-		}
-		r.msgs = append(r.msgs, rm)
+		r.SendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 		return
 	}
-
-	// if succeed,then response
-	rm = pb.Message{
-		MsgType: pb.MessageType_MsgAppendResponse,
-		From:    r.id,
-		To:      m.From,
-		Term:    m.Term,
-		Index:   r.RaftLog.LastIndex(),
-		Reject:  reject,
-	}
-	r.msgs = append(r.msgs, rm)
+	// response
+	r.SendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 }
 
 // handle append response
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	// doubt: update progress based on reject and index
+	// because I reject when there is
+	if m.Term <= r.Term && m.Reject {
+
+	}
 	if !m.Reject {
 		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
 			if m.Term != 0 { // for noop
