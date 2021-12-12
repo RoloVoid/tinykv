@@ -326,6 +326,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	pro := r.Prs[to]
 	logterm, Terr := r.RaftLog.Term(pro.Next - 1)
 	entries, Eerr := r.RaftLog.getEntries(pro.Next)
+
 	// err when getting entries, then send snapshot
 	if Terr != nil || Eerr != nil {
 		return r.SendSnapshot(to)
@@ -766,11 +767,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		reject = true
 	}
 	// 2. if one entry is stable but not equal, then reject
-	if m.Index < r.RaftLog.stabled {
-		term, _ := r.RaftLog.Term(m.Index)
-		if m.LogTerm != term {
-			reject = true
-		}
+	term, _ := r.RaftLog.Term(m.Index)
+	if m.LogTerm != term {
+		reject = true
 	}
 	// 3. sending msg
 	rm := pb.Message{}
@@ -790,6 +789,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 					}
 					lastIndex = r.RaftLog.LastIndex()
 					r.RaftLog.entries = append(r.RaftLog.entries, *item)
+					// doubt
 					r.RaftLog.stabled = m.Index
 				}
 			} else {
@@ -824,9 +824,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 // handle append response
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	if m.MsgType != pb.MessageType_MsgAppendResponse {
-		return
-	}
 	// doubt: update progress based on reject and index
 	if !m.Reject {
 		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
@@ -861,25 +858,20 @@ func (r *Raft) handlePropose(m pb.Message) {
 		return
 	}
 	// put entries to logs
-	// doubt: currently there is only one session
 	items := make([]pb.Entry, 0)
 	for i := 0; i < len(m.Entries); i++ {
 		// 1.check if propose is permitted
 		// doubt
-		m.Entries[i].Index = r.RaftLog.LastIndex() + uint64(len(r.RaftLog.entries))
-		m.Entries[i].Term = r.hardState().Term
+		m.Entries[i].Index = r.RaftLog.LastIndex() + uint64(i) + 1
+		m.Entries[i].Term = r.Term
 		// 2.put the entry into logs
 		r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[i])
 		items = append(items, *m.Entries[i])
 	}
-	// doubt: 2.1.if lastindex == 0, updated storage ---->dirty because assert
-	// storage, _ := r.RaftLog.storage.(*MemoryStorage)
-	// storage.Append(items)
-	// doubt: 2,2 if len(r.Prs) == 1, committed without append
+	// if there is one peer, then proposed = committed
 	if len(r.Prs) < 2 {
 		r.RaftLog.committed = r.RaftLog.LastIndex()
 	}
-	// 3.bcastappend
 	r.bcastAppend()
 }
 
