@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -326,7 +327,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 	// err when getting term, then send snapshot
 	if Terr != nil {
-		return r.SendSnapshot(to)
+		return r.sendSnapshot(to)
 	}
 
 	fi := r.RaftLog.FirstIndex()
@@ -356,7 +357,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 
 // doubt: whether should I add more options
-func (r *Raft) SendAppendEntryResponse(to, index uint64, reject bool) {
+func (r *Raft) sendAppendEntryResponse(to, index uint64, reject bool) {
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
@@ -370,7 +371,7 @@ func (r *Raft) SendAppendEntryResponse(to, index uint64, reject bool) {
 }
 
 // doubt: send snapshot when needed
-func (r *Raft) SendSnapshot(to uint64) bool {
+func (r *Raft) sendSnapshot(to uint64) bool {
 	pro := r.Prs[to]
 	msg := pb.Message{}
 	msg.To = to
@@ -769,6 +770,15 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 	reject := true
+	// trigger or not
+	if len(r.Prs) == 0 && r.RaftLog.LastIndex() < meta.RaftInitLogIndex {
+		r.sendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
+		return
+	}
+	if m.Term < r.Term {
+		r.sendAppendEntryResponse(m.From, meta.RaftInitLogIndex+1, reject)
+		return
+	}
 
 	if m.Term >= r.Term {
 		reject = false
@@ -811,11 +821,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 		// if not reject, update committed from leader
 		r.RaftLog.committed = m.Commit
-		r.SendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
+		r.sendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 		return
 	}
 	// response
-	r.SendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
+	r.sendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 }
 
 // handle append response
