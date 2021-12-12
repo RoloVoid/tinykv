@@ -310,8 +310,6 @@ func (r *Raft) reset() {
 	r.Majority = nil
 	r.Majority = resetMajority()
 	r.Majority.counterT++
-	r.votes = make(map[uint64]bool)
-	r.votes[r.id] = true // vote for oneself
 }
 
 // send functions
@@ -485,10 +483,6 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Lead = lead
 	r.reset()
 	r.Term = term
-	// r.Vote = None	--->doubt
-	// reset elapse
-	// r.electionElapsed = 0
-	// r.heartbeatElapsed = 0
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -498,8 +492,10 @@ func (r *Raft) becomeCandidate() {
 	r.State = StateCandidate
 	r.Lead = None
 	r.Term++
-	r.reset()     // doubt,need to be completed
-	r.Vote = r.id // vote for node itself
+	r.reset() // doubt,need to be completed
+	r.votes = make(map[uint64]bool)
+	r.votes[r.id] = true
+	r.Vote = r.id // vote for oneself
 }
 
 // becomeLeader transform this peer's state to leader
@@ -769,11 +765,10 @@ func (r *Raft) campaign() bool {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-	reject := true
-	if r.State != StateFollower && m.Term > r.Term {
+	if r.State != StateFollower && m.Term >= r.Term {
 		r.becomeFollower(m.Term, m.From)
-		reject = false
 	}
+	reject := true
 
 	if m.Term >= r.Term {
 		reject = false
