@@ -370,13 +370,24 @@ func (r *Raft) sendAppendEntryResponse(to, index uint64, reject bool) {
 	return
 }
 
-// doubt: send snapshot when needed
+// a method handle sending snapshot
 func (r *Raft) sendSnapshot(to uint64) bool {
 	pro := r.Prs[to]
 	msg := pb.Message{}
 	msg.To = to
 	msg.MsgType = pb.MessageType_MsgSnapshot
-	snapshot, err := r.RaftLog.snapshot()
+	msg.Term = r.Term
+	var (
+		snapshot pb.Snapshot
+		err      error
+	)
+	if r.RaftLog.hasPendingSnapshot() {
+		snapshot, err = r.RaftLog.snapshot()
+	} else {
+		snapshot, err = r.RaftLog.storage.Snapshot()
+	}
+
+	// get snapshot error
 	if err != nil {
 		if err == ErrSnapshotTemporarilyUnavailable {
 			r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
@@ -389,6 +400,7 @@ func (r *Raft) sendSnapshot(to uint64) bool {
 	}
 	msg.Snapshot = &snapshot
 	sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
+
 	r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
 		r.id, r.RaftLog.FirstIndex(), r.RaftLog.committed, sindex, sterm, to, pro)
 	r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pro)
@@ -770,7 +782,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 	reject := true
-	// trigger or not
 	if len(r.Prs) == 0 && r.RaftLog.LastIndex() < meta.RaftInitLogIndex {
 		r.sendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 		return
@@ -780,6 +791,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
+	// become follower
 	if m.Term >= r.Term {
 		reject = false
 		r.Term = m.Term
@@ -790,7 +802,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	if m.LogTerm > m.Term {
 		reject = true
 	}
-	// 2. if one entry is stable but not equal, then reject
+	// 2. if entry is stable but not equal, then reject
 	term, _ := r.RaftLog.Term(m.Index)
 	if m.LogTerm != term {
 		reject = true
@@ -830,22 +842,24 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 // handle append response
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	// doubt: update progress based on reject and index
-	// because I reject when there is
-	if m.Term <= r.Term && m.Reject {
-
+	// if reject,checkout if it needed to reply
+	if m.Reject && m.Term <= r.Term {
+		// rollback one and send
+		next := r.Prs[m.From].Next - 1
+		// r.Prs[m.From].Next = min(m.Index, next)
+		r.Prs[m.From].Next = next
+		r.sendAppend(m.From)
+		return
 	}
 	if !m.Reject {
 		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
 			if m.Term != 0 { // for noop
 				r.checkCommittedMapNil(i)
 				r.RaftLog.committing[i].counter++ // committed + 1
-				// doubt
 				var j int
-				if j = r.checkLogCommitted(i); j == 1 {
+				if j = r.checkLogCommitted(i); j == 1 || j == 2 {
 					r.RaftLog.committed = i
-					// send msgappend as committed to update follower's committed attribute
-					r.sendAppend(m.From)
+					r.sendAppend(m.From) // send msgappend as committed to update follower's committed attribute
 				}
 			}
 		}
@@ -864,7 +878,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 
 // handle propose for leader
 func (r *Raft) handlePropose(m pb.Message) {
-	if m.MsgType != pb.MessageType_MsgPropose || m.From != r.id {
+	if m.MsgType != pb.MessageType_MsgPropose {
 		return
 	}
 	// put entries to logs
@@ -882,6 +896,11 @@ func (r *Raft) handlePropose(m pb.Message) {
 	if len(r.Prs) < 2 {
 		r.RaftLog.committed = r.RaftLog.LastIndex()
 	}
+
+	// update progress
+	match := r.RaftLog.FirstIndex() + uint64(len(r.RaftLog.entries)-1)
+	r.Prs[r.id].Match = match
+	r.Prs[r.id].Next = match + 1
 	r.bcastAppend()
 }
 

@@ -69,6 +69,8 @@ func TestProgressLeader2AB(t *testing.T) {
 		if err := r.Step(propMsg); err != nil {
 			t.Fatalf("proposal resulted in error: %v", err)
 		}
+		// doubt
+		// fmt.Println(r.RaftLog.entries)
 	}
 }
 
@@ -153,6 +155,7 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	// Node 1 campaigns. The election fails because a quorum of nodes
 	// know about the election that already happened at term 2. Node 1's
 	// term is pushed ahead to 2.
+
 	n.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 	sm1 := n.peers[1].(*Raft)
 	if sm1.State != StateFollower {
@@ -272,6 +275,8 @@ func TestLogReplication2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
+		// doubt
+		// fmt.Println("start", i)
 		tt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
 		for _, m := range tt.msgs {
@@ -280,7 +285,8 @@ func TestLogReplication2AB(t *testing.T) {
 
 		for j, x := range tt.network.peers {
 			sm := x.(*Raft)
-
+			// doubt
+			// fmt.Println("testcheck", sm.id, sm.RaftLog.committed, tt.wcommitted)
 			if sm.RaftLog.committed != tt.wcommitted {
 				t.Errorf("#%d.%d: committed = %d, want %d", i, j, sm.RaftLog.committed, tt.wcommitted)
 			}
@@ -291,6 +297,8 @@ func TestLogReplication2AB(t *testing.T) {
 					ents = append(ents, e)
 				}
 			}
+			// doubt
+			// fmt.Println("ents", i, j, ents)
 			props := []pb.Message{}
 			for _, m := range tt.msgs {
 				if m.MsgType == pb.MessageType_MsgPropose {
@@ -298,6 +306,12 @@ func TestLogReplication2AB(t *testing.T) {
 				}
 			}
 			for k, m := range props {
+				// doubt
+				// fmt.Println("test", len(ents), k, len(m.Entries))
+				// if len(ents) == k {
+				// 	fmt.Println("ents out of bounds error")
+				// 	break
+				// }
 				if !bytes.Equal(ents[k].Data, m.Entries[0].Data) {
 					t.Errorf("#%d.%d: data = %d, want %d", i, j, ents[k].Data, m.Entries[0].Data)
 				}
@@ -1604,7 +1618,7 @@ func (nw *network) send(msgs ...pb.Message) {
 	for len(msgs) > 0 {
 		m := msgs[0]
 		p := nw.peers[m.To]
-		// doubt
+		// // doubt
 		// fmt.Println(m.String())
 		p.Step(m)
 		msgs = append(msgs[1:], nw.filter(p.readMessages())...)
