@@ -617,6 +617,10 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 		sm := newTestRaft(1, []uint64{1}, 10, 1, storage)
 		sm.becomeFollower(2, None)
 
+		// doubt
+		// if i == 7 {
+		// 	fmt.Println("start")
+		// }
 		sm.handleAppendEntries(tt.m)
 		if sm.RaftLog.LastIndex() != tt.wIndex {
 			t.Errorf("#%d: lastIndex = %d, want %d", i, sm.RaftLog.LastIndex(), tt.wIndex)
@@ -631,6 +635,10 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 		if m[0].Reject != tt.wReject {
 			t.Errorf("#%d: reject = %v, want %v", i, m[0].Reject, tt.wReject)
 		}
+		// doubt
+		// if i == 7 {
+		// 	fmt.Println("end")
+		// }
 	}
 }
 
@@ -959,7 +967,11 @@ func TestHeartbeatUpdateCommit2AB(t *testing.T) {
 
 		nt.recover()
 		nt.ignore(pb.MessageType_MsgAppend)
+		// doubt
+		// fmt.Println("start")
 		nt.send(pb.Message{From: 2, To: 2, MsgType: pb.MessageType_MsgBeat})
+		// doubt
+		// fmt.Println("end")
 		if sm1.RaftLog.committed > 1 {
 			t.Fatalf("#%d: expected sm1 commit: 1, got: %d", i, sm1.RaftLog.committed)
 		}

@@ -836,10 +836,12 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 				r.RaftLog.entries = append(r.RaftLog.entries, *item)
 			}
 		}
-		// if not reject, update committed from leader
-		r.RaftLog.committed = min(r.RaftLog.LastIndex(), m.Commit)
-		// doubt
-		// fmt.Printf("acceptted,id = %d,commit = %d\n", r.id, m.Commit)
+		// if not reject, check if it needs to update committed from leader
+		if m.Commit > r.RaftLog.committed {
+			maybecommit := min(m.Commit, m.Index+uint64(len(m.Entries)))
+			r.RaftLog.committed = min(r.RaftLog.LastIndex(), maybecommit)
+			// fmt.Printf("acceptted,id = %d,commit = %d\n", r.id, r.RaftLog.committed)
+		}
 		r.sendAppendEntryResponse(m.From, r.RaftLog.LastIndex(), reject)
 		return
 	}
@@ -919,8 +921,12 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	if m.MsgType != pb.MessageType_MsgHeartbeat {
 		return
 	}
-	// doubt ---> whether I can update commit like this
-	r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+	// doubt
+	if m.Commit > r.RaftLog.committed {
+		maybecommit := min(m.Commit, m.Index+uint64(len(m.Entries)))
+		r.RaftLog.committed = min(r.RaftLog.LastIndex(), maybecommit)
+		// fmt.Printf("acceptted,id = %d,commit = %d\n", r.id, r.RaftLog.committed)
+	}
 	hbrm := r.responseToHeartbeat(m)
 	r.msgs = append(r.msgs, *hbrm)
 }
