@@ -412,7 +412,6 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	for _, m := range r.readMessages() {
 		r.Step(acceptAndReply(m))
 	}
-	// doubt
 
 	if g := r.RaftLog.committed; g != li+1 {
 		t.Errorf("committed = %d, want %d", g, li+1)
@@ -423,6 +422,10 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	}
 	msgs := r.readMessages()
 	sort.Sort(messageSlice(msgs))
+	// doubt
+	for _, item := range msgs {
+		fmt.Println(item.String())
+	}
 	for i, m := range msgs {
 		if w := uint64(i + 2); m.To != w {
 			t.Errorf("to = %d, want %d", m.To, w)
