@@ -151,6 +151,8 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
+	// doubt
+	// fmt.Println("committed", rn.Raft.RaftLog.committed)
 	temp := Ready{
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
@@ -164,6 +166,10 @@ func (rn *RawNode) Ready() Ready {
 	}
 	if rn.Raft.RaftLog.pendingSnapshot != nil {
 		temp.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+	}
+	// check if accepted
+	if temp.SoftState != nil {
+		rn.prevSfState = temp.SoftState
 	}
 	return temp
 }
@@ -194,12 +200,15 @@ func (rn *RawNode) Advance(rd Ready) {
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHdState = rd.HardState
 	}
+	// update stabled offset
 	if len(rd.Entries) > 0 {
 		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
 	}
 	if len(rd.CommittedEntries) > 0 {
 		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 	}
+	// doubt
+	// fmt.Println("applied", rn.Raft.RaftLog.applied)
 	rn.Raft.RaftLog.maybeCompact()
 }
 

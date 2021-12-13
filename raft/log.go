@@ -90,7 +90,7 @@ func newLog(storage Storage) *RaftLog {
 	// initialize, all the pointers are at the startline
 	NewRaftLog := &RaftLog{
 		storage:    storage,
-		committed:  hd.GetCommit(),
+		committed:  hd.Commit,
 		applied:    fi - 1,
 		stabled:    li, // is not actually stabled, real stabled is li,which means stabled)
 		entries:    entries,
@@ -150,7 +150,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 		if l.committed-l.FirstIndex()+1 < 0 || l.applied-l.FirstIndex()+1 > l.LastIndex() {
 			return nil
 		}
+
 		if l.applied-l.FirstIndex()+1 >= 0 && l.committed-l.FirstIndex()+1 <= uint64(len(l.entries)) {
+			// doubt
+			// fmt.Println("ents index", l.applied-l.FirstIndex()+1, l.committed-l.FirstIndex()+1)
+			// fmt.Println("ents", l.entries, l.entries[l.applied-l.FirstIndex()+1:l.committed-l.FirstIndex()+1])
 			return l.entries[l.applied-l.FirstIndex()+1 : l.committed-l.FirstIndex()+1]
 		}
 	}

@@ -16,7 +16,6 @@ package raft
 
 import (
 	"bytes"
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -164,15 +163,21 @@ func TestRawNodeStart2AC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// doubt
+	// fmt.Println("----------------------------------")
 	rawNode.Campaign()
 	rd := rawNode.Ready()
+	// doubt
+	// fmt.Println("first rd", len(rd.CommittedEntries), rd.CommittedEntries)
 	storage.Append(rd.Entries)
 	rawNode.Advance(rd)
-
+	// doubt
+	// fmt.Println("after advance1", rawNode.Raft.RaftLog.applied, rawNode.Raft.State)
+	// fmt.Println("-----------------------------------")
 	rawNode.Propose([]byte("foo"))
 	rd = rawNode.Ready()
 	// doubt
-	fmt.Println("after propose", rd.String())
+	// fmt.Println("after propose", rd.CommittedEntries)
 	if el := len(rd.Entries); el != len(rd.CommittedEntries) || el != 1 {
 		t.Errorf("got len(Entries): %+v, len(CommittedEntries): %+v, want %+v", el, len(rd.CommittedEntries), 1)
 	}

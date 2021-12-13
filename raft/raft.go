@@ -532,7 +532,12 @@ func (r *Raft) becomeLeader() {
 	r.Prs[r.id].Next += 1
 	// noop entry, in order to make leader the newest
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: r.RaftLog.LastIndex() + 1})
-	r.bcastAppend()
+	// if there is only one raft ----> maybe kind of dirty
+	if len(r.Prs) < 2 {
+		r.RaftLog.committed += 1
+	} else {
+		r.bcastAppend()
+	}
 }
 
 // bcast functions
