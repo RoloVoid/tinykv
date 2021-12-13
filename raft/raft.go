@@ -858,23 +858,25 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		r.sendAppend(m.From)
 		return
 	}
-	if !m.Reject {
-		for i := r.Prs[m.From].Next; i <= m.Index; i++ {
-			if m.Term != 0 { // for noop
-				r.checkCommittedMapNil(i)
-				r.RaftLog.committing[i].counter++ // committed + 1
-				var j int
-				if j = r.checkLogCommitted(i); j == 1 || j == 2 {
-					r.RaftLog.committed = i
-					r.bcastAppend() // send msgappend as committed to update follower's committed attribute
-				}
+
+	// check if committed
+	if m.Term != 0 {
+		r.checkCommittedMapNil(m.Index)
+		r.RaftLog.committing[m.Index].counter++ // committed + 1
+		var j int
+		targetTerm, _ := r.RaftLog.Term(m.Index)
+		if j = r.checkLogCommitted(m.Index); (j == 1 || j == 2) && targetTerm == r.Term {
+			// if changed, send msgappend as committed to update follower's committed attribute
+			raw := r.RaftLog.committed
+			r.RaftLog.committed = max(r.RaftLog.committed, m.Index)
+			if raw < m.Index {
+				r.bcastAppend()
 			}
 		}
-		if m.Term != 0 {
-			r.Prs[m.From].Match = m.Index
-			r.Prs[m.From].Next = m.Index + 1
-		}
 	}
+
+	r.Prs[m.From].Match = m.Index
+	r.Prs[m.From].Next = m.Index + 1
 }
 
 // handle requestvote

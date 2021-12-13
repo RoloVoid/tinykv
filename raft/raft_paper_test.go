@@ -423,9 +423,9 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	msgs := r.readMessages()
 	sort.Sort(messageSlice(msgs))
 	// doubt
-	for _, item := range msgs {
-		fmt.Println(item.String())
-	}
+	// for _, item := range msgs {
+	// 	fmt.Println(item.String())
+	// }
 	for i, m := range msgs {
 		if w := uint64(i + 2); m.To != w {
 			t.Errorf("to = %d, want %d", m.To, w)
