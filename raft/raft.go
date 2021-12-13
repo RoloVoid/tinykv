@@ -184,15 +184,15 @@ type Raft struct {
 	logger Logger
 }
 
-// majority function
+// majority
 // a struct for leadercheck
-// doubt
+// doubt, maybe a burden when memory is rare
 type majority struct {
 	counterT int
 	counterF int
 }
 
-//reset init doubt
+//reset init
 func resetMajority() *majority {
 	return new(majority)
 }
@@ -305,7 +305,7 @@ func (r *Raft) pastElectionTimeout() bool {
 	return r.electionElapsed >= r.random_ElectionTimeout
 }
 
-// inspired by etcd
+// reset function is used to reset several attributes when state changes
 func (r *Raft) reset() {
 	r.resetRandomElectionTimeout()
 	r.Majority = nil
@@ -438,6 +438,7 @@ func (r *Raft) tick() {
 	}
 }
 
+// tick functions
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 	if r.pastElectionTimeout() {
@@ -489,6 +490,7 @@ func (r *Raft) tickHeartbeat() {
 
 }
 
+// become functions
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
@@ -542,7 +544,7 @@ func (r *Raft) bcastRequestVote() {
 		if r.id == id {
 			continue
 		}
-		// there is one check that won't vote for LastIndex() lesser than itself
+		// there is one check that won't vote for LastIndex() less than itself
 		mrv := pb.Message{
 			MsgType: pb.MessageType_MsgRequestVote,
 			From:    r.id,
@@ -555,7 +557,6 @@ func (r *Raft) bcastRequestVote() {
 	}
 }
 
-// bcast:progress is still not used /doubt
 func (r *Raft) bcastAppend() {
 	for id := range r.Prs {
 		if r.id == id {
@@ -574,7 +575,7 @@ func (r *Raft) bcastHeartBeat() {
 	}
 }
 
-//response functions
+// response functions
 func (r *Raft) responseToVote(m pb.Message) *pb.Message {
 	// if m.Term < r.Term -----> reject
 	if m.Term < r.Term {
@@ -662,7 +663,7 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgHup:
 		if r.campaign() {
 			r.becomeCandidate()
-			r.bcastRequestVote() // too clumsy /doubt
+			r.bcastRequestVote() //doubt: maybe too clumsy
 		}
 	case pb.MessageType_MsgAppend:
 		r.handleAppendEntries(m)
@@ -687,10 +688,8 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 	case pb.MessageType_MsgHup:
 		if r.campaign() { //campaign and send msg_requestvote
 			r.becomeCandidate()
-			r.bcastRequestVote() // to clumsy;doubt
-			return nil
+			r.bcastRequestVote() //doubt: maybe too clumsy
 		}
-		return nil
 	case pb.MessageType_MsgAppend: // doubt
 		if m.Term < r.Term {
 			return nil
@@ -700,7 +699,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.handleAppendEntries(m) //put this msg in its log and response
 	case pb.MessageType_MsgRequestVote: //check and respond and update votes
 		r.handleRequestVote(m)
-	case pb.MessageType_MsgHeartbeat: // require better design /doubt
+	case pb.MessageType_MsgHeartbeat: //doubt: maybe better design
 		if m.Term < r.Term {
 			return nil
 		}
@@ -718,7 +717,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 			r.becomeLeader()
 			r.electionElapsed = 0
 			r.heartbeatElapsed = 0
-		} else if r.checkLeader() == 2 { //doubt
+		} else if r.checkLeader() == 2 {
 			r.becomeFollower(m.Term, m.From)
 			r.electionElapsed = 0
 		}
@@ -731,7 +730,7 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 //case leader
 func (r *Raft) stepLeader(m pb.Message) error {
 	switch m.MsgType {
-	case pb.MessageType_MsgHup: //leader won't recieve this
+	case pb.MessageType_MsgHup: //leader won't recieve it
 	case pb.MessageType_MsgBeat: // send heartbeat to all the followers
 		r.bcastHeartBeat()
 	case pb.MessageType_MsgPropose: // send msgAppend to all the followers
@@ -751,8 +750,7 @@ func (r *Raft) stepLeader(m pb.Message) error {
 			r.handleHeartbeat(m)
 		}
 	case pb.MessageType_MsgHeartbeatResponse:
-		// if m.commit < leader's committed, then sendappend to update
-		if m.Commit < r.RaftLog.committed {
+		if m.Commit < r.RaftLog.committed { // if m.commit < leader's committed, then sendappend to update
 			r.sendAppend(m.From)
 		}
 	case pb.MessageType_MsgAppend:
@@ -896,7 +894,6 @@ func (r *Raft) handlePropose(m pb.Message) {
 	items := make([]pb.Entry, 0)
 	for i := 0; i < len(m.Entries); i++ {
 		// 1.check if propose is permitted
-		// doubt
 		m.Entries[i].Index = r.RaftLog.LastIndex() + uint64(i) + 1
 		m.Entries[i].Term = r.Term
 		// 2.put the entry into logs
@@ -921,7 +918,6 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	if m.MsgType != pb.MessageType_MsgHeartbeat {
 		return
 	}
-	// doubt
 	if m.Commit > r.RaftLog.committed {
 		maybecommit := min(m.Commit, m.Index+uint64(len(m.Entries)))
 		r.RaftLog.committed = min(r.RaftLog.LastIndex(), maybecommit)
